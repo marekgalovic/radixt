@@ -6,7 +6,7 @@ use std::ptr;
 
 use crate::node::Node;
 
-/// Non-empty sorted vector of T
+/// Non-empty vector of T
 /// The allocated capacity is always equal to the number of elements.
 /// The children array must have at least one element and at most 256 elements.
 #[repr(packed)]
@@ -71,9 +71,38 @@ impl<T> Children<T> {
         self.len += 1;
     }
 
+    #[inline]
+    pub(crate) fn remove(&mut self, idx: usize) -> Node<T> {
+        assert!(
+            self.len() > 1,
+            "Cannot remove last child. Drop children instead."
+        );
+        assert!(idx < self.len(), "Remove index must be < length");
+
+        let removed = unsafe {
+            // SAFETY
+            // Pointer is guaranteed to be not null and index is checked to
+            // be within bounds.
+            ptr::read(self.inner.as_ptr().add(idx))
+        };
+        self.len -= 1;
+
+        unsafe {
+            // SAFETY
+            // Pointer is guaranteed to be not null and index is checked to
+            // be within bounds.
+            ptr::copy(
+                self.inner.as_ptr().add(idx + 1),
+                self.inner.as_ptr().add(idx),
+                self.len() - idx,
+            );
+        };
+        self.shrink();
+        removed
+    }
+
     #[inline(always)]
     pub(crate) fn push(&mut self, node: Node<T>) {
-        assert!(self.len() < 256, "Node must have at most 256 children.");
         self.insert(self.len(), node);
     }
 
@@ -84,6 +113,11 @@ impl<T> Children<T> {
 
     #[inline(always)]
     fn grow(&mut self) {
+        assert!(
+            self.len() < 256,
+            "Cannot grow children array to more than 256 items"
+        );
+
         let new_layout = Self::layout(self.len() + 1);
         let new_ptr = unsafe {
             // SAFETY
@@ -96,10 +130,34 @@ impl<T> Children<T> {
         };
         self.inner = ptr::NonNull::new(new_ptr as *mut Node<T>).expect("allocation failed");
     }
+
+    #[inline(always)]
+    fn shrink(&mut self) {
+        assert!(self.len() > 0, "Cannot shrink below 0");
+        let new_layout = Self::layout(self.len());
+        let new_ptr = unsafe {
+            // SAFETY
+            // The old pointer is guaranteed to be allocated with size = len + 1
+            realloc(
+                self.inner.as_ptr() as *mut u8,
+                Self::layout(self.len() + 1),
+                new_layout.size(),
+            )
+        };
+        self.inner = ptr::NonNull::new(new_ptr as *mut Node<T>).expect("allocation failed");
+    }
 }
 
 impl<T> Drop for Children<T> {
     fn drop(&mut self) {
+        for i in 0..self.len() {
+            // Drop nodes
+            let _ = unsafe {
+                // SAFETY
+                // We are only reading from the allocated chunk
+                ptr::read(self.inner.as_ptr().add(i))
+            };
+        }
         unsafe {
             // SAFETY
             // The pointer is guaranteed to be allocated with known size
@@ -159,14 +217,14 @@ mod tests {
         assert_eq!(c[0].key(), &[]);
         assert_eq!(c[1].key(), &[1, 2]);
 
-        // Insert at the end
+        // Insert last
         c.insert(2, Node::new(&[3, 4]));
         assert_eq!(c.len(), 3);
         assert_eq!(c[0].key(), &[]);
         assert_eq!(c[1].key(), &[1, 2]);
         assert_eq!(c[2].key(), &[3, 4]);
 
-        // Insert inside
+        // Insert mid
         c.insert(2, Node::new(&[2, 3]));
         assert_eq!(c.len(), 4);
         assert_eq!(c[0].key(), &[]);
@@ -174,7 +232,7 @@ mod tests {
         assert_eq!(c[2].key(), &[2, 3]);
         assert_eq!(c[3].key(), &[3, 4]);
 
-        // Insert at the beginning
+        // Insert first
         c.insert(0, Node::new(&[0, 0]));
         assert_eq!(c.len(), 5);
         assert_eq!(c[0].key(), &[0, 0]);
@@ -182,5 +240,94 @@ mod tests {
         assert_eq!(c[2].key(), &[1, 2]);
         assert_eq!(c[3].key(), &[2, 3]);
         assert_eq!(c[4].key(), &[3, 4]);
+    }
+
+    #[test]
+    fn test_push_full() {
+        let mut c: Children<()> = Children::new(Node::new(0_u32.to_be_bytes().as_slice()));
+
+        for i in 1..=255_u32 {
+            c.push(Node::new(i.to_be_bytes().as_slice()));
+        }
+
+        assert_eq!(c.len(), 256);
+        for i in 0..=255_u32 {
+            assert_eq!(c[i as usize].key(), i.to_be_bytes().as_slice());
+        }
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_push_more_than_256_items() {
+        let mut c: Children<()> = Children::new(Node::new(0_u32.to_be_bytes().as_slice()));
+
+        for i in 1..=256_u32 {
+            c.push(Node::new(i.to_be_bytes().as_slice()));
+        }
+    }
+
+    #[test]
+    fn test_remove_items() {
+        let mut c: Children<()> = Children::new(Node::new(&[0, 1]));
+        c.push(Node::new(&[1, 2]));
+        c.push(Node::new(&[2, 3]));
+        c.push(Node::new(&[3, 4]));
+        c.push(Node::new(&[4, 5]));
+
+        assert_eq!(c.len(), 5);
+        assert_eq!(c[0].key(), &[0, 1]);
+        assert_eq!(c[1].key(), &[1, 2]);
+        assert_eq!(c[2].key(), &[2, 3]);
+        assert_eq!(c[3].key(), &[3, 4]);
+        assert_eq!(c[4].key(), &[4, 5]);
+
+        // Remove first
+        assert_eq!(c.remove(0).key(), &[0, 1]);
+        assert_eq!(c.len(), 4);
+        assert_eq!(c[0].key(), &[1, 2]);
+        assert_eq!(c[1].key(), &[2, 3]);
+        assert_eq!(c[2].key(), &[3, 4]);
+        assert_eq!(c[3].key(), &[4, 5]);
+
+        // Remove last
+        assert_eq!(c.remove(3).key(), &[4, 5]);
+        assert_eq!(c.len(), 3);
+        assert_eq!(c[0].key(), &[1, 2]);
+        assert_eq!(c[1].key(), &[2, 3]);
+        assert_eq!(c[2].key(), &[3, 4]);
+
+        // Remove mid
+        assert_eq!(c.remove(1).key(), &[2, 3]);
+        assert_eq!(c.len(), 2);
+        assert_eq!(c[0].key(), &[1, 2]);
+        assert_eq!(c[1].key(), &[3, 4]);
+
+        // Remove mid
+        assert_eq!(c.remove(1).key(), &[3, 4]);
+        assert_eq!(c.len(), 1);
+        assert_eq!(c[0].key(), &[1, 2]);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_remove_invalid_offset() {
+        let mut c: Children<()> = Children::new(Node::new(&[0, 1]));
+        c.push(Node::new(&[1, 2]));
+
+        assert_eq!(c.len(), 2);
+        assert_eq!(c[0].key(), &[0, 1]);
+        assert_eq!(c[1].key(), &[1, 2]);
+
+        c.remove(2);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_remove_last_item() {
+        let mut c: Children<()> = Children::new(Node::new(&[0, 1]));
+        assert_eq!(c.len(), 1);
+        assert_eq!(c[0].key(), &[0, 1]);
+
+        c.remove(0);
     }
 }
