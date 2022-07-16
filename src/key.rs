@@ -2,6 +2,7 @@ use std::alloc::{alloc, dealloc, realloc, Layout};
 use std::ops::Deref;
 use std::ptr;
 
+#[repr(transparent)]
 pub(crate) struct Key {
     inner: ptr::NonNull<u8>,
 }
