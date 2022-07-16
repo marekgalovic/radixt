@@ -1,33 +1,22 @@
-use std::ops::Deref;
+use crate::children::Children;
+use crate::key::Key;
 
-#[repr(transparent)]
-struct NodeKey(Box<[u8]>);
-
-impl NodeKey {
-    fn new(data: &[u8]) -> Self {
-        NodeKey(data.into())
-    }
-}
-
-impl Deref for NodeKey {
-    type Target = Box<[u8]>;
-
-    #[inline(always)]
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl std::fmt::Debug for NodeKey {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(std::str::from_utf8(&self.0).unwrap())
-    }
+#[derive(Debug)]
+#[repr(u8)]
+enum Flags {
+    Empty = 0b0000_0000,
+    ValueAllocated = 0b0000_0001,
+    ValueInitialized = 0b0000_0010,
+    ChildrenAllocated = 0b0000_0100,
+    ChildrenInitialized = 0b0000_1000,
 }
 
 #[derive(Debug)]
 pub(crate) struct Node<V> {
+    /// Flags
+    flags: Flags,
     /// Prefix for this node
-    key: NodeKey,
+    key: Key,
     /// Value of this node, if any
     value: Option<V>,
     /// Children of this node sorted by their key in
@@ -38,10 +27,16 @@ pub(crate) struct Node<V> {
 impl<V> Node<V> {
     pub(crate) fn new(key: &[u8], value: Option<V>) -> Self {
         Node {
-            key: NodeKey::new(key),
+            flags: Flags::Empty,
+            key: Key::new(key),
             value,
             children: vec![],
         }
+    }
+
+    #[inline(always)]
+    pub(crate) fn key(&self) -> &[u8] {
+        &self.key
     }
 
     pub(crate) fn insert(&mut self, key: &[u8], value: V) -> Option<V> {
@@ -92,7 +87,7 @@ impl<V> Node<V> {
         let mut old =
             std::mem::replace(&mut self.children[idx], Node::new(&key[..prefix_len], None));
         // Update old node's key
-        old.key = NodeKey::new(&old.key[prefix_len..]);
+        old.key = Key::new(&old.key[prefix_len..]);
         // Push the old node into new node's children
         self.children[idx].children.push(old);
         // Insert into the new node
@@ -128,6 +123,32 @@ impl<V> Node<V> {
     }
 }
 
+pub(crate) struct NodeIter<'a, V> {
+    stack: Vec<&'a Node<V>>,
+}
+
+impl<'a, V> NodeIter<'a, V> {
+    pub(crate) fn new(root: &'a Node<V>) -> Self {
+        NodeIter { stack: vec![root] }
+    }
+}
+
+impl<'a, V> Iterator for NodeIter<'a, V> {
+    type Item = &'a Node<V>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.stack.pop() {
+            Some(node) => {
+                for child in node.children.iter().rev() {
+                    self.stack.push(child);
+                }
+                Some(node)
+            }
+            None => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -155,5 +176,41 @@ mod tests {
 
         node.insert("ab".as_bytes(), 3);
         println!("{:?}", node);
+    }
+
+    #[test]
+    fn test_wasted_space() {
+        let mut node = Node::new(&[], None);
+
+        println!("Node size: {}", std::mem::size_of::<Node<u32>>());
+        println!("Key size: {}", std::mem::size_of::<Key>());
+        println!("Key size: {}", std::mem::size_of::<Box<[u8]>>());
+        // println!("Option size: {}", std::mem::size_of::<Option<()>>());
+
+        for i in 0..1000000_u32 {
+            node.insert(i.to_be_bytes().as_slice(), i);
+        }
+
+        let mut n_nodes = 0;
+        let mut n_nodes_with_value = 0;
+        for node in NodeIter::new(&node) {
+            n_nodes += 1;
+            if node.value.is_some() {
+                n_nodes_with_value += 1;
+            }
+            assert!(
+                node.children.len() <= 256,
+                "Node has {} children",
+                node.children.len()
+            );
+        }
+
+        println!("N nodes: {}", n_nodes);
+        println!("N nodes with value: {}", n_nodes_with_value);
+        println!("Root children: {}", node.children.len());
+        println!("{:?}", node.children[0].key);
+        for c in node.children[0].children.iter() {
+            println!("\tkey: {:?}, children: {}", &c.key, c.children.len());
+        }
     }
 }

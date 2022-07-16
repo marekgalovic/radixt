@@ -1,20 +1,29 @@
-use super::node::Node;
+use crate::node::Node;
 
 #[derive(Debug)]
 pub struct RadixMap<V> {
     root: Node<V>,
+    size: usize,
 }
 
 impl<V> RadixMap<V> {
     pub fn new() -> Self {
         RadixMap {
             root: Node::new(&[], None),
+            size: 0,
         }
     }
 
     #[inline(always)]
+    pub fn len(&self) -> usize {
+        self.size
+    }
+
+    #[inline(always)]
     pub fn insert<K: AsRef<[u8]>>(&mut self, key: K, value: V) -> Option<V> {
-        self.root.insert(key.as_ref(), value)
+        let old = self.root.insert(key.as_ref(), value);
+        self.size += old.is_none() as usize;
+        old
     }
 
     #[inline(always)]
@@ -36,6 +45,8 @@ mod tests {
         m.insert("ab", 3);
         m.insert("c", 4);
         m.insert("cad", 5);
+
+        assert_eq!(m.len(), 5);
 
         assert_eq!(m.get("ab").unwrap(), &3);
         assert_eq!(m.get("abc;0").unwrap(), &1);
