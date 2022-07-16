@@ -1,4 +1,5 @@
 use std::alloc::{alloc, dealloc, realloc, Layout};
+use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 use std::ptr;
@@ -8,7 +9,6 @@ use crate::node::Node;
 /// Non-empty sorted vector of T
 /// The allocated capacity is always equal to the number of elements.
 /// The children array must have at least one element and at most 256 elements.
-#[derive(Debug)]
 #[repr(packed)]
 pub(crate) struct Children<T> {
     len: u8,
@@ -130,38 +130,44 @@ impl<T> DerefMut for Children<T> {
     }
 }
 
+impl<T: Debug> Debug for Children<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.deref().fmt(f)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_alloc_dealloc() {
-        let c = Children::new(Node::new(&[], Some(())));
+        let c: Children<()> = Children::new(Node::new(&[]));
         assert_eq!(c.len(), 1);
     }
 
     #[test]
     fn test_add_items() {
-        let mut c = Children::new(Node::new(&[], Some(())));
+        let mut c: Children<()> = Children::new(Node::new(&[]));
 
         assert_eq!(c.len(), 1);
         assert_eq!(c[0].key(), &[]);
 
         // Push
-        c.push(Node::new(&[1, 2], Some(())));
+        c.push(Node::new(&[1, 2]));
         assert_eq!(c.len(), 2);
         assert_eq!(c[0].key(), &[]);
         assert_eq!(c[1].key(), &[1, 2]);
 
         // Insert at the end
-        c.insert(2, Node::new(&[3, 4], Some(())));
+        c.insert(2, Node::new(&[3, 4]));
         assert_eq!(c.len(), 3);
         assert_eq!(c[0].key(), &[]);
         assert_eq!(c[1].key(), &[1, 2]);
         assert_eq!(c[2].key(), &[3, 4]);
 
         // Insert inside
-        c.insert(2, Node::new(&[2, 3], Some(())));
+        c.insert(2, Node::new(&[2, 3]));
         assert_eq!(c.len(), 4);
         assert_eq!(c[0].key(), &[]);
         assert_eq!(c[1].key(), &[1, 2]);
@@ -169,7 +175,7 @@ mod tests {
         assert_eq!(c[3].key(), &[3, 4]);
 
         // Insert at the beginning
-        c.insert(0, Node::new(&[0, 0], Some(())));
+        c.insert(0, Node::new(&[0, 0]));
         assert_eq!(c.len(), 5);
         assert_eq!(c[0].key(), &[0, 0]);
         assert_eq!(c[1].key(), &[]);

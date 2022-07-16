@@ -9,7 +9,7 @@ pub struct RadixMap<V> {
 impl<V> RadixMap<V> {
     pub fn new() -> Self {
         RadixMap {
-            root: Node::new(&[], None),
+            root: Node::new(&[]),
             size: 0,
         }
     }
