@@ -1,5 +1,5 @@
 pub mod map;
-pub mod tree;
+pub(crate) mod node;
 
 #[cfg(test)]
 mod tests {
