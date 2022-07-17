@@ -1,6 +1,8 @@
 use crate::children::Children;
 use crate::key::Key;
 
+use crate::longest_common_prefix;
+
 #[derive(Debug)]
 pub(crate) struct Node<T> {
     /// Prefix for this node
@@ -56,7 +58,7 @@ impl<T> Node<T> {
             return self.value.replace(value);
         }
 
-        let (prefix_len, child_idx) = self.longest_common_prefix(key);
+        let (prefix_len, child_idx) = longest_common_prefix(self.children(), key);
         if prefix_len == 0 {
             // No child shares a prefix with the key
             return self.insert_child(child_idx, key, value);
@@ -132,9 +134,8 @@ impl<T> Node<T> {
 
     #[inline(always)]
     fn select_next_child(&self, key: &[u8]) -> Option<(usize, usize)> {
-        let (prefix_len, child_idx) = self.longest_common_prefix(key);
-        if (prefix_len == 0) || (prefix_len < self.children.as_ref().unwrap()[child_idx].key.len())
-        {
+        let (prefix_len, child_idx) = longest_common_prefix(self.children(), key);
+        if (prefix_len == 0) || (prefix_len < self.children()[child_idx].key.len()) {
             // There is no or only a partial match in which case the
             // key does not exist in the tree.
             return None;
@@ -150,6 +151,15 @@ impl<T> Node<T> {
             None => self.children = Some(Children::new(node)),
         };
         None
+    }
+
+    #[inline(always)]
+    #[cfg(test)]
+    pub(crate) fn push_child(&mut self, node: Node<T>) {
+        match &mut self.children {
+            Some(children) => children.push(node),
+            None => self.children = Some(Children::new(node)),
+        };
     }
 
     #[inline(always)]
@@ -184,37 +194,6 @@ impl<T> Node<T> {
         // Insert into the new node
         children[idx].insert(&key[prefix_len..], value)
     }
-
-    #[inline]
-    fn longest_common_prefix(&self, key: &[u8]) -> (usize, usize) {
-        if let Some(children) = &self.children {
-            // If an element exists in the array it returns Ok(index)
-            // If an element does not exist in the array it returns Err(index) where index
-            // is the insert index that maintains the sort order.
-            let byte0 = [key[0]];
-            let idx = match children.binary_search_by_key(&byte0.as_slice(), |k| &k.key) {
-                Ok(idx) => idx,
-                Err(idx) => idx,
-            };
-
-            if (idx >= children.len()) || (children[idx].key[0] != key[0]) {
-                // Not found
-                return (0, idx);
-            }
-
-            let common_prefix_len = key
-                .iter()
-                .zip(children[idx].key.iter())
-                .take_while(|(a, b)| a == b)
-                .count();
-
-            (common_prefix_len, idx)
-        } else {
-            // The children array is empty so there is not common prefix
-            // and the new item should be inserted at index = 0.
-            (0, 0)
-        }
-    }
 }
 
 #[cfg(test)]
@@ -223,26 +202,6 @@ mod tests {
     use crate::node_iter::NodeIter;
 
     use std::collections::BTreeMap;
-
-    #[test]
-    fn test_longest_common_prefix() {
-        let mut children: Children<()> = Children::new(Node::new("abb;0".as_bytes()));
-        children.push(Node::new("cde;1".as_bytes()));
-        children.push(Node::new("fgh;2".as_bytes()));
-        children.push(Node::new("ijk;3".as_bytes()));
-
-        let mut node = Node::new("".as_bytes());
-        node.children = Some(children);
-
-        assert_eq!(node.longest_common_prefix("abb;1".as_bytes()), (4, 0));
-        assert_eq!(node.longest_common_prefix("abb;0123".as_bytes()), (5, 0));
-        assert_eq!(node.longest_common_prefix("fg".as_bytes()), (2, 2));
-        assert_eq!(node.longest_common_prefix("ijk;2".as_bytes()), (4, 3));
-        assert_eq!(node.longest_common_prefix("ijk;3ab".as_bytes()), (5, 3));
-        assert_eq!(node.longest_common_prefix("i".as_bytes()), (1, 3));
-        assert_eq!(node.longest_common_prefix("lmo".as_bytes()), (0, 4));
-        assert_eq!(node.longest_common_prefix("bar".as_bytes()), (0, 1));
-    }
 
     #[test]
     fn test_insert() {

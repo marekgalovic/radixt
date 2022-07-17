@@ -5,6 +5,8 @@ use std::ptr;
 
 use bitflags::bitflags;
 
+use crate::longest_common_prefix;
+
 bitflags! {
     struct Flags: u8 {
         const VALUE_ALLOCATED = 0b0000_0001;
@@ -32,7 +34,7 @@ impl<T> Node<T> {
         assert!(key.len() < 256, "Key length must be < 256");
         // Allocate
         let flags = Flags::empty();
-        let data = Self::alloc(flags, key.len(), 0);
+        let data = Self::alloc(flags, key.len());
         // Write key
         unsafe {
             ptr::write(data.as_ptr(), key.len() as u8);
@@ -51,7 +53,7 @@ impl<T> Node<T> {
         // Allocate
         let mut flags = Flags::empty();
         flags.set(Flags::VALUE_ALLOCATED, true);
-        let data = Self::alloc(flags, key.len(), 0);
+        let data = Self::alloc(flags, key.len());
         unsafe {
             // Write key
             ptr::write(data.as_ptr(), key.len() as u8);
@@ -68,209 +70,18 @@ impl<T> Node<T> {
         }
     }
 
-    // Memory management stuff
-    #[inline(always)]
-    fn create_layout(flags: Flags, key_len: usize, children_count: usize) -> Layout {
-        let mut layout = Layout::array::<u8>(key_len + 1).expect("invalid layout");
-
-        if flags.contains(Flags::VALUE_ALLOCATED) {
-            layout = layout.extend(Layout::new::<T>()).expect("invalid layout").0;
-        }
-
-        if flags.contains(Flags::HAS_CHILDREN) {
-            layout = layout
-                .extend(Layout::new::<u8>())
-                .expect("invalid layout")
-                .0;
-            layout = layout
-                .extend(Layout::array::<Node<T>>(children_count).expect("invalid layout"))
-                .expect("invalid layout")
-                .0;
-        }
-
-        layout.pad_to_align()
-    }
-
-    #[inline(always)]
-    fn curr_layout(&self) -> Layout {
-        Self::create_layout(self.flags, self.key().len(), self.children().len())
-    }
-
-    #[inline(always)]
-    fn alloc(flags: Flags, key_len: usize, children_count: usize) -> ptr::NonNull<u8> {
-        let layout = Self::create_layout(flags, key_len, 0);
-        let ptr = unsafe { alloc(layout) };
-        ptr::NonNull::new(ptr).expect("allocation failed")
-    }
-
-    #[inline(always)]
-    fn realloc(&mut self, new_flags: Flags, children_count: usize) {
-        let old_layout = self.curr_layout();
-        let new_layout = Self::create_layout(new_flags, self.key().len(), children_count);
-        let new_ptr = unsafe { realloc(self.data.as_ptr(), old_layout, new_layout.size()) };
-        self.data = ptr::NonNull::new(new_ptr).expect("allocation failed");
-        self.flags = new_flags;
-    }
-
-    // Key access methods
+    // Exposed API
     #[inline(always)]
     pub(crate) fn key(&self) -> &[u8] {
-        unsafe {
-            let len = *self.data.as_ptr() as usize;
-            std::slice::from_raw_parts(self.data.as_ptr().add(1), len)
-        }
+        unsafe { std::slice::from_raw_parts(self.key_ptr(), self.key_len()) }
     }
 
-    #[inline]
-    fn strip_key_prefix(&mut self, prefix_len: usize) {
-        assert!(prefix_len <= self.key().len(), "Invalid prefix len");
-
-        let old_layout = self.curr_layout();
-        let new_key_len = self.key().len() - prefix_len;
-        let value_len = if self.flags.contains(Flags::VALUE_ALLOCATED) {
-            size_of::<T>()
-        } else {
-            0
-        };
-        let children_len = if self.flags.contains(Flags::HAS_CHILDREN) {
-            1 + self.children().len() * size_of::<Node<T>>()
-        } else {
-            0
-        };
-        // Shift left
-        unsafe {
-            ptr::write(self.data.as_ptr(), new_key_len as u8);
-            ptr::copy(
-                self.data.as_ptr().add(1 + prefix_len),
-                self.data.as_ptr().add(1),
-                new_key_len + value_len + children_len,
-            )
-        }
-        let new_layout = Self::create_layout(self.flags, new_key_len, self.children().len());
-        let new_ptr = unsafe { realloc(self.data.as_ptr(), old_layout, new_layout.size()) };
-        self.data = ptr::NonNull::new(new_ptr).expect("allocation failed");
-    }
-
-    #[inline]
-    fn extend_key(&mut self, suffix: &[u8]) {
-        let new_key_len = self.key().len() + suffix.len();
-        assert!(new_key_len < 256, "Cannot extend key. Suffix is too long.");
-
-        let old_layout = self.curr_layout();
-        let value_len = if self.flags.contains(Flags::VALUE_ALLOCATED) {
-            size_of::<T>()
-        } else {
-            0
-        };
-        let children_len = if self.flags.contains(Flags::HAS_CHILDREN) {
-            1 + self.children().len() * size_of::<Node<T>>()
-        } else {
-            0
-        };
-        let new_layout = Self::create_layout(self.flags, new_key_len, self.children().len());
-        let new_ptr = unsafe { realloc(self.data.as_ptr(), old_layout, new_layout.size()) };
-        self.data = ptr::NonNull::new(new_ptr).expect("allocation failed");
-
-        unsafe {
-            // Shift right
-            ptr::copy(
-                self.data.as_ptr().add(1 + self.key().len()),
-                self.data.as_ptr().add(1 + new_key_len),
-                value_len + children_len,
-            );
-            // Extend key
-            ptr::copy(
-                suffix.as_ptr(),
-                self.data.as_ptr().add(1 + self.key().len()),
-                suffix.len(),
-            );
-            // Write new key length
-            ptr::write(self.data.as_ptr(), new_key_len as u8);
-        }
-    }
-
-    // Value access methods
     #[inline(always)]
     pub(crate) fn value(&self) -> Option<&T> {
         if self.flags.contains(Flags::VALUE_INITIALIZED) {
-            return unsafe {
-                let ptr = self.data.as_ptr().add(1 + self.key().len());
-                Some(&*(ptr as *const T))
-            };
+            return unsafe { Some(&*self.value_ptr()) };
         }
         None
-    }
-
-    #[inline(always)]
-    fn value_mut(&mut self) -> Option<&mut T> {
-        if self.flags.contains(Flags::VALUE_INITIALIZED) {
-            return unsafe {
-                let ptr = self.data.as_ptr().add(1 + self.key().len());
-                Some(&mut *(ptr as *mut T))
-            };
-        }
-        None
-    }
-
-    #[inline]
-    fn take_value(&mut self) -> Option<T> {
-        if self.flags.contains(Flags::VALUE_INITIALIZED) {
-            self.flags.set(Flags::VALUE_INITIALIZED, false);
-            Some(unsafe {
-                let ptr = self.data.as_ptr().add(1 + self.key().len());
-                ptr::read(ptr as *const T)
-            })
-        } else {
-            None
-        }
-    }
-
-    #[inline]
-    fn replace_value(&mut self, value: T) -> Option<T> {
-        if !self.flags.contains(Flags::VALUE_ALLOCATED) {
-            // Allocate value if it's not allocated
-            let children_count = self.children().len();
-
-            let mut new_flags = self.flags.clone();
-            new_flags.set(Flags::VALUE_ALLOCATED, true);
-            self.realloc(new_flags, children_count);
-
-            if self.flags.contains(Flags::HAS_CHILDREN) {
-                // Move children to the right to make space for value
-                unsafe {
-                    ptr::copy(
-                        self.data.as_ptr().add(1 + self.key().len()),
-                        self.data
-                            .as_ptr()
-                            .add(1 + self.key().len() + size_of::<T>()),
-                        1 + children_count * size_of::<Node<T>>(),
-                    )
-                }
-            }
-        }
-
-        let ptr = unsafe { self.data.as_ptr().add(1 + self.key().len()) as *mut T };
-        if self.flags.contains(Flags::VALUE_INITIALIZED) {
-            // Replace old value
-            Some(unsafe { std::mem::replace::<T>(&mut *ptr, value) })
-        } else {
-            // Write value and set initialized flag
-            unsafe {
-                ptr::write(ptr, value);
-            }
-            self.flags.set(Flags::VALUE_INITIALIZED, true);
-            None
-        }
-    }
-
-    // Children access methods
-    #[inline(always)]
-    fn children_offset(&self) -> usize {
-        let offset = 1 + self.key().len();
-        if self.flags.contains(Flags::VALUE_ALLOCATED) {
-            return offset + size_of::<T>();
-        }
-        offset
     }
 
     #[inline(always)]
@@ -279,31 +90,9 @@ impl<T> Node<T> {
             return &[];
         }
 
-        let offset = self.children_offset();
         unsafe {
-            let children_count = *self.data.as_ptr().add(offset) as usize + 1;
-            let ptr = self.data.as_ptr().add(1 + offset) as *const Node<T>;
-            std::slice::from_raw_parts(ptr, children_count)
+            std::slice::from_raw_parts(self.children_ptr(), *self.children_len_ptr() as usize + 1)
         }
-    }
-
-    #[inline(always)]
-    fn children_mut(&self) -> &mut [Node<T>] {
-        if !self.flags.contains(Flags::HAS_CHILDREN) {
-            return &mut [];
-        }
-
-        let offset = self.children_offset();
-        unsafe {
-            let children_count = *self.data.as_ptr().add(offset) as usize + 1;
-            let ptr = self.data.as_ptr().add(1 + offset) as *mut Node<T>;
-            std::slice::from_raw_parts_mut(ptr, children_count)
-        }
-    }
-
-    #[inline(always)]
-    fn is_empty(&self) -> bool {
-        self.value().is_none() && self.children().is_empty()
     }
 
     pub(crate) fn insert(&mut self, key: &[u8], value: T) -> Option<T> {
@@ -311,7 +100,7 @@ impl<T> Node<T> {
             return self.replace_value(value);
         }
 
-        let (prefix_len, child_idx) = self.longest_common_prefix(key);
+        let (prefix_len, child_idx) = longest_common_prefix(self.children(), key);
         if prefix_len == 0 {
             // No child shares a prefix with the key
             return self.insert_child(child_idx, Node::new_with_value(key, value));
@@ -332,7 +121,7 @@ impl<T> Node<T> {
         if key.is_empty() {
             let removed = self.take_value();
             if (self.children().len() == 1)
-                && (self.key().len() + self.children()[0].key().len() < 256)
+                && (self.key_len() + self.children()[0].key().len() < 256)
             {
                 // If the node has only one child and len(node key + child key) < 256
                 // then we can merge the nodes together.
@@ -386,8 +175,234 @@ impl<T> Node<T> {
     }
 
     #[inline(always)]
+    fn is_empty(&self) -> bool {
+        self.value().is_none() && self.children().is_empty()
+    }
+
+    // Memory management
+    #[inline(always)]
+    fn create_layout(flags: Flags, key_len: usize, children_count: usize) -> Layout {
+        let mut layout = Layout::array::<u8>(key_len + 1).expect("invalid layout");
+
+        if flags.contains(Flags::VALUE_ALLOCATED) {
+            layout = layout.extend(Layout::new::<T>()).expect("invalid layout").0;
+        }
+
+        if flags.contains(Flags::HAS_CHILDREN) {
+            layout = layout
+                .extend(Layout::new::<u8>())
+                .expect("invalid layout")
+                .0;
+            layout = layout
+                .extend(Layout::array::<Node<T>>(children_count).expect("invalid layout"))
+                .expect("invalid layout")
+                .0;
+        }
+
+        layout.pad_to_align()
+    }
+
+    #[inline(always)]
+    fn curr_layout(&self) -> Layout {
+        Self::create_layout(self.flags, self.key_len(), self.children().len())
+    }
+
+    #[inline(always)]
+    fn alloc(flags: Flags, key_len: usize) -> ptr::NonNull<u8> {
+        let layout = Self::create_layout(flags, key_len, 0);
+        let ptr = unsafe { alloc(layout) };
+        ptr::NonNull::new(ptr).expect("allocation failed")
+    }
+
+    #[inline(always)]
+    fn realloc(
+        &mut self,
+        old_layout: Layout,
+        new_flags: Flags,
+        key_len: usize,
+        children_count: usize,
+    ) {
+        let new_layout = Self::create_layout(new_flags, key_len, children_count);
+        let new_ptr = unsafe { realloc(self.data.as_ptr(), old_layout, new_layout.size()) };
+        self.data = ptr::NonNull::new(new_ptr).expect("allocation failed");
+        self.flags = new_flags;
+    }
+
+    #[inline(always)]
+    fn data_size(&self) -> usize {
+        let mut size = 1 + self.key_len();
+        if self.flags.contains(Flags::VALUE_ALLOCATED) {
+            size += size_of::<T>();
+        }
+        if self.flags.contains(Flags::HAS_CHILDREN) {
+            size += 1 + self.children().len() * size_of::<Node<T>>();
+        }
+        size
+    }
+
+    #[inline(always)]
+    fn key_len(&self) -> usize {
+        unsafe { *self.data.as_ptr() as usize }
+    }
+
+    #[inline(always)]
+    unsafe fn key_len_ptr(&self) -> *mut u8 {
+        self.data.as_ptr()
+    }
+
+    #[inline(always)]
+    unsafe fn key_ptr(&self) -> *mut u8 {
+        self.data.as_ptr().add(1)
+    }
+
+    #[inline(always)]
+    unsafe fn value_ptr(&self) -> *mut T {
+        assert!(self.flags.contains(Flags::VALUE_ALLOCATED));
+        self.data.as_ptr().add(1 + self.key_len()) as *mut T
+    }
+
+    #[inline(always)]
+    unsafe fn children_len_ptr(&self) -> *mut u8 {
+        assert!(self.flags.contains(Flags::HAS_CHILDREN));
+        let mut ptr = self.data.as_ptr().add(1 + self.key_len());
+        if self.flags.contains(Flags::VALUE_ALLOCATED) {
+            ptr = ptr.add(size_of::<T>());
+        }
+        ptr
+    }
+
+    #[inline(always)]
+    unsafe fn children_ptr(&self) -> *mut Node<T> {
+        self.children_len_ptr().add(1) as *mut Node<T>
+    }
+
+    // Key access methods
+    #[inline]
+    fn strip_key_prefix(&mut self, prefix_len: usize) {
+        assert!(prefix_len <= self.key_len(), "Invalid prefix len");
+
+        let old_layout = self.curr_layout();
+        let new_key_len = self.key_len() - prefix_len;
+        let copy_size = self.data_size() - prefix_len - 1;
+        // Shift left
+        unsafe {
+            ptr::write(self.key_len_ptr(), new_key_len as u8);
+            ptr::copy(
+                self.data.as_ptr().add(1 + prefix_len),
+                self.key_ptr(),
+                copy_size,
+            )
+        }
+        self.realloc(old_layout, self.flags, new_key_len, self.children().len());
+    }
+
+    #[inline]
+    fn extend_key(&mut self, suffix: &[u8]) {
+        let new_key_len = self.key_len() + suffix.len();
+        assert!(new_key_len < 256, "Cannot extend key. Suffix is too long.");
+
+        self.realloc(
+            self.curr_layout(),
+            self.flags,
+            new_key_len,
+            self.children().len(),
+        );
+
+        unsafe {
+            // Shift value + children right
+            ptr::copy(
+                self.data.as_ptr().add(1 + self.key_len()),
+                self.data.as_ptr().add(1 + new_key_len),
+                self.data_size() - self.key_len() - 1,
+            );
+            // Extend key
+            ptr::copy(
+                suffix.as_ptr(),
+                self.data.as_ptr().add(1 + self.key_len()),
+                suffix.len(),
+            );
+            // Write new key length
+            ptr::write(self.key_len_ptr(), new_key_len as u8);
+        }
+    }
+
+    // Value access methods
+    #[inline(always)]
+    fn value_mut(&mut self) -> Option<&mut T> {
+        if self.flags.contains(Flags::VALUE_INITIALIZED) {
+            return unsafe { Some(&mut *self.value_ptr()) };
+        }
+        None
+    }
+
+    #[inline]
+    fn take_value(&mut self) -> Option<T> {
+        if self.flags.contains(Flags::VALUE_INITIALIZED) {
+            self.flags.set(Flags::VALUE_INITIALIZED, false);
+            Some(unsafe { ptr::read(self.value_ptr()) })
+        } else {
+            None
+        }
+    }
+
+    #[inline]
+    fn replace_value(&mut self, value: T) -> Option<T> {
+        if !self.flags.contains(Flags::VALUE_ALLOCATED) {
+            // Allocate value if it's not allocated
+            let children_count = self.children().len();
+
+            let mut new_flags = self.flags.clone();
+            new_flags.set(Flags::VALUE_ALLOCATED, true);
+            self.realloc(
+                self.curr_layout(),
+                new_flags,
+                self.key_len(),
+                children_count,
+            );
+
+            if self.flags.contains(Flags::HAS_CHILDREN) {
+                // Move children to the right to make space for value
+                unsafe {
+                    ptr::copy(
+                        self.value_ptr() as *mut u8,
+                        self.children_len_ptr(),
+                        1 + children_count * size_of::<Node<T>>(),
+                    )
+                }
+            }
+        }
+
+        if self.flags.contains(Flags::VALUE_INITIALIZED) {
+            // Replace old value
+            Some(unsafe { std::mem::replace::<T>(&mut *self.value_ptr(), value) })
+        } else {
+            // Write value and set initialized flag
+            unsafe {
+                ptr::write(self.value_ptr(), value);
+            }
+            self.flags.set(Flags::VALUE_INITIALIZED, true);
+            None
+        }
+    }
+
+    // Children access methods
+    #[inline(always)]
+    fn children_mut(&self) -> &mut [Node<T>] {
+        if !self.flags.contains(Flags::HAS_CHILDREN) {
+            return &mut [];
+        }
+
+        unsafe {
+            std::slice::from_raw_parts_mut(
+                self.children_ptr(),
+                *self.children_len_ptr() as usize + 1,
+            )
+        }
+    }
+
+    #[inline(always)]
     fn select_next_child(&self, key: &[u8]) -> Option<(usize, usize)> {
-        let (prefix_len, child_idx) = self.longest_common_prefix(key);
+        let (prefix_len, child_idx) = longest_common_prefix(self.children(), key);
         if (prefix_len == 0) || (prefix_len < self.children()[child_idx].key().len()) {
             // There is no or only a partial match in which case the
             // key does not exist in the tree.
@@ -405,21 +420,24 @@ impl<T> Node<T> {
             // Allocate children
             let mut new_flags = self.flags.clone();
             new_flags.set(Flags::HAS_CHILDREN, true);
-            self.realloc(new_flags, 1);
+            self.realloc(self.curr_layout(), new_flags, self.key_len(), 1);
             // Insert at 0th position
-            let offset = self.children_offset();
             unsafe {
-                ptr::write(self.data.as_ptr().add(offset), 0);
-                ptr::write(self.data.as_ptr().add(offset + 1) as *mut Node<T>, node);
+                ptr::write(self.children_len_ptr(), 0);
+                ptr::write(self.children_ptr(), node);
             }
         } else {
             // Grow
-            self.realloc(self.flags, self.children().len() + 1);
+            self.realloc(
+                self.curr_layout(),
+                self.flags,
+                self.key_len(),
+                self.children().len() + 1,
+            );
             // Insert
-            let offset = self.children_offset();
             unsafe {
                 // Shift children to the right
-                let node_ptr = self.data.as_ptr().add(offset + 1) as *mut Node<T>;
+                let node_ptr = self.children_ptr();
                 ptr::copy(
                     node_ptr.add(idx),
                     node_ptr.add(idx + 1),
@@ -428,15 +446,14 @@ impl<T> Node<T> {
                 // Write new node
                 ptr::write(node_ptr.add(idx), node);
                 // Increment count
-                let count_ptr = self.data.as_ptr().add(offset);
-                ptr::write(count_ptr, *count_ptr + 1);
+                ptr::write(self.children_len_ptr(), *self.children_len_ptr() + 1);
             }
         }
         None
     }
 
     #[inline(always)]
-    fn push_child(&mut self, node: Node<T>) -> Option<T> {
+    pub(super) fn push_child(&mut self, node: Node<T>) -> Option<T> {
         self.insert_child(self.children().len(), node)
     }
 
@@ -445,21 +462,19 @@ impl<T> Node<T> {
         assert!(idx < self.children().len(), "invalid offset");
 
         if self.flags.contains(Flags::HAS_CHILDREN) {
-            let offset = self.children_offset();
-            let node_ptr = unsafe { self.data.as_ptr().add(offset + 1) as *mut Node<T> };
-            let removed = unsafe { ptr::read(node_ptr.add(idx)) };
+            let removed = unsafe { ptr::read(self.children_ptr().add(idx)) };
             if self.children().len() == 1 {
                 // Deallocate children
                 let mut new_flags = self.flags.clone();
                 new_flags.set(Flags::HAS_CHILDREN, false);
-                self.realloc(new_flags, 0);
+                self.realloc(self.curr_layout(), new_flags, self.key_len(), 0);
             } else {
                 assert!(self.children().len() > 1);
                 unsafe {
                     // Decrement count
-                    let count_ptr = self.data.as_ptr().add(offset);
-                    ptr::write(count_ptr, *count_ptr - 1);
+                    ptr::write(self.children_len_ptr(), *self.children_len_ptr() - 1);
                     // Shift children to the left
+                    let node_ptr = self.children_ptr();
                     ptr::copy(
                         node_ptr.add(idx + 1),
                         node_ptr.add(idx),
@@ -467,7 +482,12 @@ impl<T> Node<T> {
                     );
                 }
                 // Shrink
-                self.realloc(self.flags, self.children().len());
+                self.realloc(
+                    self.curr_layout(),
+                    self.flags,
+                    self.key_len(),
+                    self.children().len(),
+                );
             }
             removed
         } else {
@@ -491,13 +511,13 @@ impl<T> Node<T> {
         // Allocate children
         let mut new_flags = self.flags.clone();
         new_flags.set(Flags::HAS_CHILDREN, true);
-        self.realloc(new_flags, src_count);
+        self.realloc(self.curr_layout(), new_flags, self.key_len(), src_count);
 
         // Copy from src node to self
         unsafe {
             ptr::copy(
-                src_node.data.as_ptr().add(src_node.children_offset()),
-                self.data.as_ptr().add(self.children_offset()),
+                src_node.children_len_ptr(),
+                self.children_len_ptr(),
                 1 + src_count * size_of::<Node<T>>(),
             );
         }
@@ -505,7 +525,7 @@ impl<T> Node<T> {
         // Deallocate src node children
         let mut new_src_flags = src_node.flags.clone();
         new_src_flags.set(Flags::HAS_CHILDREN, false);
-        src_node.realloc(new_src_flags, 0);
+        src_node.realloc(src_node.curr_layout(), new_src_flags, src_node.key_len(), 0);
     }
 
     #[inline(always)]
@@ -521,35 +541,9 @@ impl<T> Node<T> {
         // Update old node's key
         old.strip_key_prefix(prefix_len);
         // Initialize new node's children with the old node
-        children[idx].insert_child(0, old);
+        children[idx].push_child(old);
         // Insert into the new node
         children[idx].insert(&key[prefix_len..], value)
-    }
-
-    #[inline]
-    fn longest_common_prefix(&self, key: &[u8]) -> (usize, usize) {
-        // If an element exists in the array it returns Ok(index)
-        // If an element does not exist in the array it returns Err(index) where index
-        // is the insert index that maintains the sort order.
-        let children = self.children();
-        let byte0 = [key[0]];
-        let idx = match children.binary_search_by_key(&byte0.as_slice(), |k| k.key()) {
-            Ok(idx) => idx,
-            Err(idx) => idx,
-        };
-
-        if (idx >= children.len()) || (children[idx].key()[0] != key[0]) {
-            // Not found
-            return (0, idx);
-        }
-
-        let common_prefix_len = key
-            .iter()
-            .zip(children[idx].key().iter())
-            .take_while(|(a, b)| a == b)
-            .count();
-
-        (common_prefix_len, idx)
     }
 }
 
@@ -557,13 +551,12 @@ impl<T> Drop for Node<T> {
     fn drop(&mut self) {
         if self.flags.contains(Flags::VALUE_INITIALIZED) {
             // Drop value
-            let _value =
-                unsafe { ptr::read(self.data.as_ptr().add(1 + self.key().len()) as *mut T) };
+            let _value = unsafe { ptr::read(self.data.as_ptr().add(1 + self.key_len()) as *mut T) };
         }
         if self.flags.contains(Flags::HAS_CHILDREN) {
             // Drop children
             unsafe {
-                let node_ptr = self.data.as_ptr().add(self.children_offset() + 1) as *mut Node<T>;
+                let node_ptr = self.children_ptr();
                 for i in 0..self.children().len() {
                     let _node = ptr::read(node_ptr.add(i));
                 }
@@ -582,25 +575,6 @@ mod tests {
     use crate::node_iter::NodeIter;
 
     use std::collections::BTreeMap;
-
-    #[test]
-    fn test_longest_common_prefix() {
-        let mut node: Node<()> = Node::new("".as_bytes());
-
-        node.push_child(Node::new("abb;0".as_bytes()));
-        node.push_child(Node::new("cde;1".as_bytes()));
-        node.push_child(Node::new("fgh;2".as_bytes()));
-        node.push_child(Node::new("ijk;3".as_bytes()));
-
-        assert_eq!(node.longest_common_prefix("abb;1".as_bytes()), (4, 0));
-        assert_eq!(node.longest_common_prefix("abb;0123".as_bytes()), (5, 0));
-        assert_eq!(node.longest_common_prefix("fg".as_bytes()), (2, 2));
-        assert_eq!(node.longest_common_prefix("ijk;2".as_bytes()), (4, 3));
-        assert_eq!(node.longest_common_prefix("ijk;3ab".as_bytes()), (5, 3));
-        assert_eq!(node.longest_common_prefix("i".as_bytes()), (1, 3));
-        assert_eq!(node.longest_common_prefix("lmo".as_bytes()), (0, 4));
-        assert_eq!(node.longest_common_prefix("bar".as_bytes()), (0, 1));
-    }
 
     #[test]
     fn test_new() {
