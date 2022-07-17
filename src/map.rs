@@ -49,8 +49,18 @@ impl<T> RadixMap<T> {
     }
 
     #[inline(always)]
+    pub fn contains_key<K: AsRef<[u8]>>(&self, key: K) -> bool {
+        self.get(key).is_some()
+    }
+
+    #[inline(always)]
     pub fn iter(&self) -> RadixMapIter<'_, T> {
         RadixMapIter::new(&self.root)
+    }
+
+    #[inline(always)]
+    pub(super) fn root(&self) -> &Node<T> {
+        &self.root
     }
 }
 

@@ -30,6 +30,7 @@ pub(crate) struct Node<T> {
 }
 
 impl<T> Node<T> {
+    #[inline]
     pub(crate) fn new(key: &[u8]) -> Self {
         assert!(key.len() < 256, "Key length must be < 256");
         // Allocate
@@ -48,6 +49,7 @@ impl<T> Node<T> {
         }
     }
 
+    #[inline]
     fn new_with_value(key: &[u8], value: T) -> Self {
         assert!(key.len() < 256, "Key length must be < 256");
         // Allocate
@@ -95,6 +97,7 @@ impl<T> Node<T> {
         }
     }
 
+    #[inline]
     pub(crate) fn insert(&mut self, key: &[u8], value: T) -> Option<T> {
         if key.is_empty() {
             return self.replace_value(value);
@@ -103,7 +106,8 @@ impl<T> Node<T> {
         let (prefix_len, child_idx) = longest_common_prefix(self.children(), key);
         if prefix_len == 0 {
             // No child shares a prefix with the key
-            return self.insert_child(child_idx, Node::new_with_value(key, value));
+            self.insert_child(child_idx, Node::new_with_value(key, value));
+            return None;
         }
 
         // Some child shares a prefix with the key
@@ -117,6 +121,7 @@ impl<T> Node<T> {
         Self::split_child(children, child_idx, prefix_len, key, value)
     }
 
+    #[inline]
     pub(crate) fn remove(&mut self, key: &[u8]) -> Option<T> {
         if key.is_empty() {
             let removed = self.take_value();
@@ -150,6 +155,7 @@ impl<T> Node<T> {
         }
     }
 
+    #[inline]
     pub(crate) fn get(&self, key: &[u8]) -> Option<&T> {
         if key.is_empty() {
             return self.value();
@@ -161,6 +167,7 @@ impl<T> Node<T> {
         }
     }
 
+    #[inline]
     pub(crate) fn get_mut(&mut self, key: &[u8]) -> Option<&mut T> {
         if key.is_empty() {
             return self.value_mut();
@@ -412,7 +419,7 @@ impl<T> Node<T> {
     }
 
     #[inline]
-    fn insert_child(&mut self, idx: usize, node: Node<T>) -> Option<T> {
+    fn insert_child(&mut self, idx: usize, node: Node<T>) {
         assert!(idx <= self.children().len(), "invalid offset");
         assert!(self.children().len() < 256, "Children array is full");
 
@@ -434,6 +441,7 @@ impl<T> Node<T> {
                 self.key_len(),
                 self.children().len() + 1,
             );
+
             // Insert
             unsafe {
                 // Shift children to the right
@@ -449,12 +457,11 @@ impl<T> Node<T> {
                 ptr::write(self.children_len_ptr(), *self.children_len_ptr() + 1);
             }
         }
-        None
     }
 
     #[inline(always)]
-    pub(super) fn push_child(&mut self, node: Node<T>) -> Option<T> {
-        self.insert_child(self.children().len(), node)
+    pub(super) fn push_child(&mut self, node: Node<T>) {
+        self.insert_child(self.children().len(), node);
     }
 
     #[inline]

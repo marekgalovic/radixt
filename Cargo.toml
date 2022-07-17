@@ -1,9 +1,14 @@
 [package]
-name = "radix_tree_rs"
+name = "radix_tree"
 version = "0.1.0"
+authors = ["Marek Galovic <galovic.galovic@gmail.com>"]
 edition = "2021"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+description = "A fast, memory-efficient radix tree implementation in Rust"
+license = "MIT"
+repository = "https://github.com/marekgalovic/radix_tree_rs"
+keywords = ["radix", "tree", "map", "set"]
+readme = "README.md"
+categories = ["data-structures"]
 
 [features]
 default = ["packed"]

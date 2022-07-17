@@ -1,4 +1,4 @@
-use radix_tree_rs::map::RadixMap;
+use radix_tree::map::RadixMap;
 
 fn main() {
     let mut map = RadixMap::new();

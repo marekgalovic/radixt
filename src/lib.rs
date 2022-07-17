@@ -13,6 +13,7 @@ pub(crate) use packed_node as node;
 
 pub mod map;
 pub(crate) mod node_iter;
+pub mod set;
 
 #[inline]
 fn longest_common_prefix<T>(children: &[node::Node<T>], key: &[u8]) -> (usize, usize) {
