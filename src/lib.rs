@@ -3,6 +3,8 @@ pub(crate) mod node;
 pub mod iter;
 pub mod map;
 pub mod set;
+pub use map::RadixMap;
+pub use set::RadixSet;
 
 #[inline]
 fn longest_common_prefix<T>(children: &[node::Node<T>], key: &[u8]) -> (usize, usize) {

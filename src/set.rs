@@ -1,5 +1,5 @@
+use crate::iter::{Iter, MapK};
 use crate::map::RadixMap;
-use crate::node::Node;
 
 #[derive(Debug)]
 pub struct RadixSet {
@@ -13,79 +13,51 @@ impl RadixSet {
         }
     }
 
+    /// Returns the number of elements in the set.
     #[inline(always)]
     pub fn len(&self) -> usize {
         self.inner.len()
     }
 
+    /// Returns `true` if the set contains no elements.
     #[inline(always)]
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
     }
 
+    /// Adds a value to the set.
+    ///
+    /// If the set did not have an equal element present, true is returned.
+    ///
+    /// If the set did have an equal element present, false is returned,
     #[inline(always)]
     pub fn insert<K: AsRef<[u8]>>(&mut self, key: K) -> bool {
         self.inner.insert(key.as_ref(), ()).is_none()
     }
 
+    /// If the set contains an element equal to the value, removes it from
+    /// the set and drops it. Returns whether such an element was present.
     #[inline(always)]
     pub fn remove<K: AsRef<[u8]>>(&mut self, key: K) -> bool {
         self.inner.remove(key.as_ref()).is_some()
     }
 
+    /// Returns `true` if the set contains an element equal to the value.
     #[inline(always)]
     pub fn contains<K: AsRef<[u8]>>(&self, key: K) -> bool {
         self.inner.contains_key(key)
     }
 
+    /// Gets an iterator that visits the elements of this set in ascending order.
     #[inline(always)]
-    pub fn iter(&self) -> RadixSetIter<'_> {
-        RadixSetIter::new(&self.inner.root())
+    pub fn iter(&self) -> Iter<'_, (), MapK<()>> {
+        self.inner.keys()
     }
-}
 
-pub struct RadixSetIter<'a> {
-    stack: Vec<(usize, &'a Node<()>)>,
-    prefix: Vec<u8>,
-}
-
-impl<'a> RadixSetIter<'a> {
-    fn new(root: &'a Node<()>) -> Self {
-        let prefix = root.key().to_vec();
-        let stack = root
-            .children()
-            .iter()
-            .rev()
-            .map(|e| (prefix.len(), e))
-            .collect();
-
-        RadixSetIter { stack, prefix }
-    }
-}
-
-impl<'a> Iterator for RadixSetIter<'a> {
-    type Item = Vec<u8>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match self.stack.pop() {
-            Some((prefix_len, node)) => {
-                // Update prefix
-                self.prefix.truncate(prefix_len);
-                self.prefix.extend(node.key());
-
-                // Push node's children to stack
-                for child in node.children().iter().rev() {
-                    self.stack.push((self.prefix.len(), child));
-                }
-
-                // Return value
-                match node.value() {
-                    Some(_) => Some(self.prefix.clone()),
-                    None => self.next(),
-                }
-            }
-            None => None,
-        }
+    /// Gets an iterator that visits the elements matching a given prefix in ascending order.
+    #[inline(always)]
+    pub fn prefix_iter<K: AsRef<[u8]>>(&self, prefix: K) -> Iter<(), MapK<()>> {
+        self.inner.prefix_keys(prefix)
     }
 }
 
@@ -133,15 +105,15 @@ mod tests {
         let mut it = set.iter();
 
         let k = it.next().unwrap();
-        assert_eq!(k, b"ab");
+        assert_eq!(k.as_ref(), b"ab");
         let k = it.next().unwrap();
-        assert_eq!(k, b"abb;0");
+        assert_eq!(k.as_ref(), b"abb;0");
         let k = it.next().unwrap();
-        assert_eq!(k, b"abc;0");
+        assert_eq!(k.as_ref(), b"abc;0");
         let k = it.next().unwrap();
-        assert_eq!(k, b"c");
+        assert_eq!(k.as_ref(), b"c");
         let k = it.next().unwrap();
-        assert_eq!(k, b"cad");
+        assert_eq!(k.as_ref(), b"cad");
 
         assert_eq!(it.next(), None);
     }

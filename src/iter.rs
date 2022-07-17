@@ -125,3 +125,68 @@ impl<'a, T, M: IterMapMut<'a, T>> Iterator for IterMut<'a, T, M> {
         }
     }
 }
+
+pub struct MapKV<'a, T> {
+    _marker: PhantomData<&'a T>,
+}
+
+impl<'a, T> IterMap<'a, T> for MapKV<'a, T> {
+    type Output = (Box<[u8]>, &'a T);
+
+    #[inline(always)]
+    fn map(prefix: &[u8], value: &'a T) -> Self::Output {
+        (prefix.into(), value)
+    }
+}
+
+pub struct MapV<'a, T> {
+    _marker: PhantomData<&'a T>,
+}
+
+impl<'a, T> IterMap<'a, T> for MapV<'a, T> {
+    type Output = &'a T;
+
+    #[inline(always)]
+    fn map(_prefix: &[u8], value: &'a T) -> Self::Output {
+        value
+    }
+}
+
+pub struct MapK<'a, T> {
+    _marker: PhantomData<&'a T>,
+}
+
+impl<'a, T> IterMap<'a, T> for MapK<'a, T> {
+    type Output = Box<[u8]>;
+
+    #[inline(always)]
+    fn map(prefix: &[u8], _value: &'a T) -> Self::Output {
+        prefix.into()
+    }
+}
+
+pub struct MapKVMut<'a, T> {
+    _marker: PhantomData<&'a T>,
+}
+
+impl<'a, T> IterMapMut<'a, T> for MapKVMut<'a, T> {
+    type Output = (Box<[u8]>, &'a mut T);
+
+    #[inline(always)]
+    fn map(prefix: &[u8], value: &'a mut T) -> Self::Output {
+        (prefix.into(), value)
+    }
+}
+
+pub struct MapVMut<'a, T> {
+    _marker: PhantomData<&'a T>,
+}
+
+impl<'a, T> IterMapMut<'a, T> for MapVMut<'a, T> {
+    type Output = &'a mut T;
+
+    #[inline(always)]
+    fn map(_prefix: &[u8], value: &'a mut T) -> Self::Output {
+        value
+    }
+}
