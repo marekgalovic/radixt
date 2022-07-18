@@ -1,4 +1,4 @@
-use std::ops::{Bound, RangeBounds};
+use std::ops::RangeBounds;
 
 use crate::iter::{
     Iter, IterMap, IterMapMut, IterMut, MapK, MapKV, MapKVMut, MapV, MapVMut, Range, RangeMut,
@@ -414,12 +414,88 @@ mod tests {
         m.insert("bc", 7);
         m.insert("bd", 8);
 
-        for (k, v) in m.range("a"..) {
-            println!("key: {}, val: {}", std::str::from_utf8(&k).unwrap(), *v);
+        assert_eq!(m.range::<&[u8], _>(..).count(), 8);
+        assert_eq!(m.range("a"..).count(), 8);
+        assert_eq!(m.range("a".."b").count(), 4);
+        assert_eq!(m.range("a"..="b").count(), 4);
+        assert_eq!(m.range("a"..="ba").count(), 5);
+        assert_eq!(m.range("ab"..="ba").count(), 4);
+        assert_eq!(m.range("ae"..).count(), 4);
+
+        for ((k1, v1), (k2, v2)) in m.range("a"..).zip(m.iter().take(4)) {
+            assert_eq!(k1.as_ref(), k2.as_ref());
+            assert_eq!(*v1, *v2);
         }
 
-        for (k, v) in m.range("a".."b") {
-            println!("key: {}, val: {}", std::str::from_utf8(&k).unwrap(), *v);
+        for ((k1, v1), (k2, v2)) in m.range("ab"..="ba").zip(m.iter().skip(1).take(4)) {
+            assert_eq!(k1.as_ref(), k2.as_ref());
+            assert_eq!(*v1, *v2);
         }
+
+        assert_eq!(m.range("b"..).count(), 4);
+        assert_eq!(m.range("b".."b").count(), 0);
+        assert_eq!(m.range("b"..="b").count(), 0);
+        assert_eq!(m.range("b"..="be").count(), 4);
+        assert_eq!(m.range("bb".."bc").count(), 1);
+        assert_eq!(m.range("bb"..="bc").count(), 2);
+
+        for ((k1, v1), (k2, v2)) in m.range("bb"..="bc").zip(m.iter().skip(5).take(2)) {
+            assert_eq!(k1.as_ref(), k2.as_ref());
+            assert_eq!(*v1, *v2);
+        }
+
+        assert_eq!(m.range("be"..).count(), 0);
+        assert_eq!(m.range("c"..).count(), 0);
+    }
+
+    #[test]
+    fn test_range_mut() {
+        let mut m = RadixMap::new();
+        m.insert("aa", 1);
+        m.insert("ab", 2);
+        m.insert("ac", 3);
+        m.insert("ad", 4);
+        m.insert("ba", 5);
+        m.insert("bb", 6);
+        m.insert("bc", 7);
+        m.insert("bd", 8);
+
+        assert_eq!(m.range_mut::<&[u8], _>(..).count(), 8);
+        assert_eq!(m.range_mut("a"..).count(), 8);
+        assert_eq!(m.range_mut("a".."b").count(), 4);
+        assert_eq!(m.range_mut("a"..="b").count(), 4);
+        assert_eq!(m.range_mut("a"..="ba").count(), 5);
+        assert_eq!(m.range_mut("ab"..="ba").count(), 4);
+        assert_eq!(m.range_mut("ae"..).count(), 4);
+
+        for ((k1, v1), (k2, v2)) in m.range("a"..).zip(m.iter().take(4)) {
+            assert_eq!(k1.as_ref(), k2.as_ref());
+            assert_eq!(*v1, *v2);
+        }
+
+        for ((k1, v1), (k2, v2)) in m.range("ab"..="ba").zip(m.iter().skip(1).take(4)) {
+            assert_eq!(k1.as_ref(), k2.as_ref());
+            assert_eq!(*v1, *v2);
+        }
+
+        assert_eq!(m.range_mut("b"..).count(), 4);
+        assert_eq!(m.range_mut("b".."b").count(), 0);
+        assert_eq!(m.range_mut("b"..="b").count(), 0);
+        assert_eq!(m.range_mut("b"..="be").count(), 4);
+        assert_eq!(m.range_mut("bb".."bc").count(), 1);
+        assert_eq!(m.range_mut("bb"..="bc").count(), 2);
+
+        for ((k1, v1), (k2, v2)) in m.range("bb"..="bc").zip(m.iter().skip(5).take(2)) {
+            assert_eq!(k1.as_ref(), k2.as_ref());
+            assert_eq!(*v1, *v2);
+        }
+
+        assert_eq!(m.range_mut("be"..).count(), 0);
+        assert_eq!(m.range_mut("c"..).count(), 0);
+
+        let (_, v) = m.range_mut("bb".."bc").next().unwrap();
+        *v = 66;
+
+        assert_eq!(m.get("bb"), Some(&66));
     }
 }
