@@ -1,4 +1,7 @@
-use std::marker::PhantomData;
+use std::{
+    marker::PhantomData,
+    ops::{Bound, RangeBounds},
+};
 
 use crate::node::Node;
 
@@ -32,6 +35,12 @@ impl<'a, T, M: IterMap<'a, T>> Iter<'a, T, M> {
             prefix,
             _marker: PhantomData::default(),
         }
+    }
+
+    /// Returns a reference to current key.
+    /// This key is only valid until .next() is called again.
+    fn curr_key(&self) -> &[u8] {
+        &self.prefix
     }
 }
 
@@ -80,6 +89,12 @@ impl<'a, T, M: IterMapMut<'a, T>> IterMut<'a, T, M> {
             _marker: PhantomData::default(),
         }
     }
+
+    /// Returns a reference to current key.
+    /// This key is only valid until .next() is called again.
+    fn curr_key(&self) -> &[u8] {
+        &self.prefix
+    }
 }
 
 impl<'a, T, M: IterMapMut<'a, T>> Iterator for IterMut<'a, T, M> {
@@ -110,6 +125,112 @@ impl<'a, T, M: IterMapMut<'a, T>> Iterator for IterMut<'a, T, M> {
                     })),
                     None => self.next(),
                 }
+            }
+            None => None,
+        }
+    }
+}
+
+#[inline(always)]
+fn in_range_left<K: AsRef<[u8]>>(bound: Bound<&K>, key: &[u8]) -> bool {
+    match bound {
+        Bound::Excluded(lb) => lb.as_ref() < key,
+        Bound::Included(lb) => lb.as_ref() <= key,
+        Bound::Unbounded => true,
+    }
+}
+
+#[inline(always)]
+fn in_range_right<K: AsRef<[u8]>>(bound: Bound<&K>, key: &[u8]) -> bool {
+    match bound {
+        Bound::Excluded(ub) => ub.as_ref() > key,
+        Bound::Included(ub) => ub.as_ref() >= key,
+        Bound::Unbounded => true,
+    }
+}
+
+pub struct Range<'a, T, K: AsRef<[u8]>, B: RangeBounds<K>> {
+    iter: Iter<'a, T, MapV<'a, T>>,
+    bounds: B,
+    done: bool,
+    _marker: PhantomData<K>,
+}
+
+impl<'a, T, K: AsRef<[u8]>, B: RangeBounds<K>> Range<'a, T, K, B> {
+    pub(crate) fn new(iter: Iter<'a, T, MapV<'a, T>>, bounds: B) -> Self {
+        Range {
+            iter,
+            bounds,
+            done: false,
+            _marker: PhantomData::default(),
+        }
+    }
+}
+
+impl<'a, T, K: AsRef<[u8]>, B: RangeBounds<K>> Iterator for Range<'a, T, K, B> {
+    type Item = <MapKV<'a, T> as IterMap<'a, T>>::Output;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.done {
+            return None;
+        }
+
+        match self.iter.next() {
+            Some(v) => {
+                let k = self.iter.curr_key();
+                if !in_range_left(self.bounds.start_bound(), k.as_ref()) {
+                    return self.next();
+                }
+                if !in_range_right(self.bounds.end_bound(), k.as_ref()) {
+                    self.done = true;
+                    return None;
+                }
+
+                Some(MapKV::map(k, v))
+            }
+            None => None,
+        }
+    }
+}
+
+pub struct RangeMut<'a, T, K: AsRef<[u8]>, B: RangeBounds<K>> {
+    iter: IterMut<'a, T, MapVMut<'a, T>>,
+    bounds: B,
+    done: bool,
+    _marker: PhantomData<K>,
+}
+
+impl<'a, T, K: AsRef<[u8]>, B: RangeBounds<K>> RangeMut<'a, T, K, B> {
+    pub(crate) fn new(iter: IterMut<'a, T, MapVMut<'a, T>>, bounds: B) -> Self {
+        RangeMut {
+            iter,
+            bounds,
+            done: false,
+            _marker: PhantomData::default(),
+        }
+    }
+}
+
+impl<'a, T, K: AsRef<[u8]>, B: RangeBounds<K>> Iterator for RangeMut<'a, T, K, B> {
+    type Item = <MapKVMut<'a, T> as IterMapMut<'a, T>>::Output;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.done {
+            return None;
+        }
+
+        match self.iter.next() {
+            Some(v) => {
+                let k = self.iter.curr_key();
+                if !in_range_left(self.bounds.start_bound(), k.as_ref()) {
+                    return self.next();
+                }
+                if !in_range_right(self.bounds.end_bound(), k.as_ref()) {
+                    self.done = true;
+                    return None;
+                }
+
+                Some(MapKVMut::map(k, v))
             }
             None => None,
         }

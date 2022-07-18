@@ -1,4 +1,8 @@
-use crate::iter::{Iter, IterMap, IterMapMut, IterMut, MapK, MapKV, MapKVMut, MapV, MapVMut};
+use std::ops::{Bound, RangeBounds};
+
+use crate::iter::{
+    Iter, IterMap, IterMapMut, IterMut, MapK, MapKV, MapKVMut, MapV, MapVMut, Range, RangeMut,
+};
 use crate::node::Node;
 
 #[derive(Debug)]
@@ -135,6 +139,16 @@ impl<T> RadixMap<T> {
     #[inline(always)]
     pub fn prefix_keys<K: AsRef<[u8]>>(&self, prefix: K) -> Iter<T, MapK<T>> {
         self.get_prefix_iter(prefix)
+    }
+
+    #[inline(always)]
+    pub fn range<K: AsRef<[u8]>, B: RangeBounds<K>>(&self, bounds: B) -> Range<T, K, B> {
+        Range::new(self.get_iter(), bounds)
+    }
+
+    #[inline(always)]
+    pub fn range_mut<K: AsRef<[u8]>, B: RangeBounds<K>>(&mut self, bounds: B) -> RangeMut<T, K, B> {
+        RangeMut::new(self.get_iter_mut(), bounds)
     }
 
     fn get_iter<'a, M: IterMap<'a, T>>(&'a self) -> Iter<'a, T, M> {
@@ -386,5 +400,26 @@ mod tests {
 
         let mut it = m.prefix_iter_mut(b"abd");
         assert_eq!(it.next(), None);
+    }
+
+    #[test]
+    fn test_range() {
+        let mut m = RadixMap::new();
+        m.insert("aa", 1);
+        m.insert("ab", 2);
+        m.insert("ac", 3);
+        m.insert("ad", 4);
+        m.insert("ba", 5);
+        m.insert("bb", 6);
+        m.insert("bc", 7);
+        m.insert("bd", 8);
+
+        for (k, v) in m.range("a"..) {
+            println!("key: {}, val: {}", std::str::from_utf8(&k).unwrap(), *v);
+        }
+
+        for (k, v) in m.range("a".."b") {
+            println!("key: {}, val: {}", std::str::from_utf8(&k).unwrap(), *v);
+        }
     }
 }
