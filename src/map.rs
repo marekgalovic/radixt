@@ -69,7 +69,7 @@ impl<T> RadixMap<T> {
 
     /// Gets an iterator over the entries of the map, sorted by key.
     /// This iterator allocates a boxed slice for each item. If you
-    /// only need to access values consider using .values() instead.
+    /// only need to access values consider using [`Self::values()`] instead.
     #[inline(always)]
     pub fn iter(&self) -> Iter<T, MapKV<T>> {
         self.get_iter()
@@ -77,7 +77,7 @@ impl<T> RadixMap<T> {
 
     /// Gets a mutable iterator over the entries of the map, sorted by key.
     /// This iterator allocates a boxed slice for each item. If you only
-    /// need to access values consider using .values_mut() instead.
+    /// need to access values consider using [`Self::values_mut()`] instead.
     #[inline(always)]
     pub fn iter_mut(&mut self) -> IterMut<T, MapKVMut<T>> {
         self.get_iter_mut()
@@ -86,7 +86,7 @@ impl<T> RadixMap<T> {
     /// Gets an iterator over the entries of the map matching a given prefix, sorted by key.
     ///
     /// This iterator allocates a boxed slice for each item. If you only
-    /// need to access values consider using .prefix_values(prefix) instead.
+    /// need to access values consider using [`Self::prefix_values()`] instead.
     #[inline(always)]
     pub fn prefix_iter<K: AsRef<[u8]>>(&self, prefix: K) -> Iter<T, MapKV<T>> {
         self.get_prefix_iter(prefix)
@@ -95,7 +95,7 @@ impl<T> RadixMap<T> {
     /// Gets a mutable iterator over the entries of the map matching a given prefix, sorted by key.
     ///
     /// This iterator allocates a boxed slice for each item. If you only
-    /// need to access values consider using .prefix_values_mut(prefix) instead.
+    /// need to access values consider using [`Self::prefix_values_mut()`] instead.
     #[inline(always)]
     pub fn prefix_iter_mut<K: AsRef<[u8]>>(&mut self, prefix: K) -> IterMut<T, MapKVMut<T>> {
         self.get_prefix_iter_mut(prefix)
