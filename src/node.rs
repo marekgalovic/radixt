@@ -265,7 +265,7 @@ impl<T> Node<T> {
 
     #[inline(always)]
     fn flags(&self) -> Flags {
-        unsafe { Flags::from_bits(*self.data.as_ptr()).unwrap() }
+        unsafe { Flags::from_bits(*self.data.as_ptr()).expect("invalid flags") }
     }
 
     #[inline(always)]
@@ -605,7 +605,7 @@ impl<T> Drop for Node<T> {
     fn drop(&mut self) {
         if self.flags().contains(Flags::VALUE_INITIALIZED) {
             // Drop value
-            let _value = unsafe { ptr::read(self.data.as_ptr().add(1 + self.key_len()) as *mut T) };
+            let _value = unsafe { ptr::read(self.value_ptr()) };
         }
         if self.flags().contains(Flags::HAS_CHILDREN) {
             // Drop children
