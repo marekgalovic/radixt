@@ -141,11 +141,17 @@ impl<T> RadixMap<T> {
         self.get_prefix_iter(prefix)
     }
 
+    /// Constructs an iterator over a sub-range of elements in the map. The simplest 
+    /// way is to use the range syntax `min..max`, thus `range(min..max)` will yield elements from min 
+    /// (inclusive) to max (exclusive). The range may also be entered as `(Bound<T>, Bound<T>)`.
     #[inline(always)]
     pub fn range<K: AsRef<[u8]>, B: RangeBounds<K>>(&self, bounds: B) -> Range<T, K, B> {
         Range::new(self.get_iter(), bounds)
     }
 
+    /// Constructs a mutable iterator over a sub-range of elements in the map. The simplest 
+    /// way is to use the range syntax `min..max`, thus `range(min..max)` will yield elements from min 
+    /// (inclusive) to max (exclusive). The range may also be entered as `(Bound<T>, Bound<T>)`.
     #[inline(always)]
     pub fn range_mut<K: AsRef<[u8]>, B: RangeBounds<K>>(&mut self, bounds: B) -> RangeMut<T, K, B> {
         RangeMut::new(self.get_iter_mut(), bounds)
