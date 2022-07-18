@@ -194,6 +194,18 @@ impl<T> RadixMap<T> {
 mod tests {
     use super::*;
 
+    fn populated_map() -> RadixMap<u32> {
+        let mut m = RadixMap::new();
+
+        m.insert("cad", 5);
+        m.insert("abc;0", 1);
+        m.insert("c", 4);
+        m.insert("abb;0", 2);
+        m.insert("ab", 3);
+
+        m
+    }
+
     #[test]
     fn test_insert_and_get() {
         let mut m = RadixMap::new();
@@ -220,16 +232,31 @@ mod tests {
         assert_eq!(m.get(""), None);
     }
 
-    fn populated_map() -> RadixMap<u32> {
-        let mut m = RadixMap::new();
+    #[test]
+    fn test_remove() {
+        let mut m = populated_map();
 
-        m.insert("cad", 5);
-        m.insert("abc;0", 1);
-        m.insert("c", 4);
-        m.insert("abb;0", 2);
-        m.insert("ab", 3);
+        assert_eq!(m.len(), 5);
+        assert_eq!(m.get("ab").unwrap(), &3);
+        assert_eq!(m.get("abc;0").unwrap(), &1);
+        assert_eq!(m.get("abb;0").unwrap(), &2);
+        assert_eq!(m.get("c").unwrap(), &4);
+        assert_eq!(m.get("cad").unwrap(), &5);
 
-        m
+        assert_eq!(m.remove("ab"), Some(3));
+        assert_eq!(m.len(), 4);
+        assert!(m.get("ab").is_none());
+
+        assert_eq!(m.remove("cad"), Some(5));
+        assert_eq!(m.len(), 3);
+        assert!(m.get("cad").is_none());
+
+        assert_eq!(m.remove("cad"), None);
+        assert_eq!(m.remove("foobar"), None);
+
+        assert_eq!(m.get("abc;0").unwrap(), &1);
+        assert_eq!(m.get("abb;0").unwrap(), &2);
+        assert_eq!(m.get("c").unwrap(), &4);
     }
 
     #[test]

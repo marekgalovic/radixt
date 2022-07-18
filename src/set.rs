@@ -92,15 +92,46 @@ mod tests {
         assert!(!set.contains(""));
     }
 
-    #[test]
-    fn test_iter() {
+    fn populated_set() -> RadixSet {
         let mut set = RadixSet::new();
-
         set.insert("cad");
         set.insert("abc;0");
         set.insert("c");
         set.insert("abb;0");
         set.insert("ab");
+        set
+    }
+
+    #[test]
+    fn test_remove() {
+        let mut set = populated_set();
+
+        assert_eq!(set.len(), 5);
+        assert!(set.contains("ab"));
+        assert!(set.contains("abc;0"));
+        assert!(set.contains("abb;0"));
+        assert!(set.contains("c"));
+        assert!(set.contains("cad"));
+
+        assert!(set.remove("ab"));
+        assert_eq!(set.len(), 4);
+        assert!(!set.contains("ab"));
+
+        assert!(set.remove("cad"));
+        assert_eq!(set.len(), 3);
+        assert!(!set.contains("cad"));
+
+        assert!(!set.remove("cad"));
+        assert!(!set.remove("foobar"));
+
+        assert!(set.contains("abc;0"));
+        assert!(set.contains("abb;0"));
+        assert!(set.contains("c"));
+    }
+
+    #[test]
+    fn test_iter() {
+        let set = populated_set();
 
         let mut it = set.iter();
 
@@ -115,6 +146,48 @@ mod tests {
         let k = it.next().unwrap();
         assert_eq!(k.as_ref(), b"cad");
 
+        assert_eq!(it.next(), None);
+    }
+
+    #[test]
+    fn test_prefix_iter() {
+        let set = populated_set();
+
+        let mut it = set.prefix_iter(b"ab");
+        let k = it.next().unwrap();
+        assert_eq!(k.as_ref(), b"ab");
+        let k = it.next().unwrap();
+        assert_eq!(k.as_ref(), b"abb;0");
+        let k = it.next().unwrap();
+        assert_eq!(k.as_ref(), b"abc;0");
+        assert_eq!(it.next(), None);
+
+        let mut it = set.prefix_iter(b"abb");
+        let k = it.next().unwrap();
+        assert_eq!(k.as_ref(), b"abb;0");
+        assert_eq!(it.next(), None);
+
+        let mut it = set.prefix_iter(b"c");
+        let k = it.next().unwrap();
+        assert_eq!(k.as_ref(), b"c");
+        let k = it.next().unwrap();
+        assert_eq!(k.as_ref(), b"cad");
+        assert_eq!(it.next(), None);
+
+        let mut it = set.prefix_iter(b"ca");
+        let k = it.next().unwrap();
+        assert_eq!(k.as_ref(), b"cad");
+        assert_eq!(it.next(), None);
+
+        let mut it = set.prefix_iter(b"cad");
+        let k = it.next().unwrap();
+        assert_eq!(k.as_ref(), b"cad");
+        assert_eq!(it.next(), None);
+
+        let mut it = set.prefix_iter(b"cada");
+        assert_eq!(it.next(), None);
+
+        let mut it = set.prefix_iter(b"abd");
         assert_eq!(it.next(), None);
     }
 }
