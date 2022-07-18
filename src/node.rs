@@ -2,6 +2,7 @@ use std::alloc::{alloc, dealloc, realloc, Layout};
 use std::marker::PhantomData;
 use std::mem::size_of;
 use std::ptr;
+use std::slice::{from_raw_parts, from_raw_parts_mut};
 
 use bitflags::bitflags;
 
@@ -75,7 +76,7 @@ impl<T> Node<T> {
     // Exposed API
     #[inline(always)]
     pub(crate) fn key(&self) -> &[u8] {
-        unsafe { std::slice::from_raw_parts(self.key_ptr(), self.key_len()) }
+        unsafe { from_raw_parts(self.key_ptr(), self.key_len()) }
     }
 
     #[inline(always)]
@@ -100,9 +101,7 @@ impl<T> Node<T> {
             return &[];
         }
 
-        unsafe {
-            std::slice::from_raw_parts(self.children_ptr(), *self.children_len_ptr() as usize + 1)
-        }
+        unsafe { from_raw_parts(self.children_ptr(), *self.children_len_ptr() as usize + 1) }
     }
 
     #[inline(always)]
@@ -111,12 +110,7 @@ impl<T> Node<T> {
             return &mut [];
         }
 
-        unsafe {
-            std::slice::from_raw_parts_mut(
-                self.children_ptr(),
-                *self.children_len_ptr() as usize + 1,
-            )
-        }
+        unsafe { from_raw_parts_mut(self.children_ptr(), *self.children_len_ptr() as usize + 1) }
     }
 
     #[inline]
@@ -203,32 +197,45 @@ impl<T> Node<T> {
         }
     }
 
+    /// Returns a reference to a node which matches a given prefix.
     #[inline]
-    pub(crate) fn find_prefix(&self, prefix: &[u8]) -> Option<&Node<T>> {
-        if prefix.is_empty() {
-            return Some(self);
-        }
-
+    pub(crate) fn find_prefix(&self, prefix: &[u8]) -> Option<(usize, &Node<T>)> {
         let (prefix_len, child_idx) = longest_common_prefix(self.children(), prefix);
         if prefix_len == 0 {
             // No child matches the prefix
             return None;
         }
-        self.children()[child_idx].find_prefix(&prefix[prefix_len..])
+
+        let suffix = &prefix[prefix_len..];
+        let child = &self.children()[child_idx];
+        if suffix.len() == 0 {
+            return Some((0, child));
+        }
+        child
+            .find_prefix(&prefix[prefix_len..])
+            .map(|(k, n)| (prefix_len + k, n))
     }
 
+    /// Returns a mutable reference to a node which matches a given prefix.
+    /// The mutable reference should only be used to get a mutable reference
+    /// to the value and not to mutate the node's structure (e.g. by calling
+    /// insert or remove).
     #[inline]
-    pub(crate) fn find_prefix_mut(&mut self, prefix: &[u8]) -> Option<&mut Node<T>> {
-        if prefix.is_empty() {
-            return Some(self);
-        }
-
+    pub(crate) fn find_prefix_mut(&mut self, prefix: &[u8]) -> Option<(usize, &mut Node<T>)> {
         let (prefix_len, child_idx) = longest_common_prefix(self.children(), prefix);
         if prefix_len == 0 {
             // No child matches the prefix
             return None;
         }
-        self.children_mut()[child_idx].find_prefix_mut(&prefix[prefix_len..])
+
+        let suffix = &prefix[prefix_len..];
+        let child = &mut self.children_mut()[child_idx];
+        if suffix.len() == 0 {
+            return Some((0, child));
+        }
+        child
+            .find_prefix_mut(&prefix[prefix_len..])
+            .map(|(k, n)| (prefix_len + k, n))
     }
 
     #[inline(always)]
@@ -969,28 +976,32 @@ mod tests {
 
         let prefix = b"foo;ba";
         for i in 1..=prefix.len() {
-            let n = root.find_prefix(&prefix[..i]).unwrap();
+            let (prefix_len, n) = root.find_prefix(&prefix[..i]).unwrap();
             assert_eq!(n.key(), b"foo;ba");
             assert_eq!(n.children().len(), 2);
+            assert_eq!(prefix_len, 0);
         }
 
         let prefix = b"bar;";
         for i in 1..=prefix.len() {
-            let n = root.find_prefix(&prefix[..i]).unwrap();
+            let (prefix_len, n) = root.find_prefix(&prefix[..i]).unwrap();
             assert_eq!(n.key(), b"bar;");
             assert_eq!(n.children().len(), 2);
             assert_eq!(n.children()[0].value(), Some(&5));
             assert_eq!(n.children()[1].value(), Some(&6));
+            assert_eq!(prefix_len, 0);
         }
 
-        let n = root.find_prefix(b"foo;bar").unwrap();
+        let (prefix_len, n) = root.find_prefix(b"foo;bar").unwrap();
         assert_eq!(n.key(), b"r;");
+        assert_eq!(prefix_len, 6);
         assert_eq!(n.children().len(), 2);
         assert_eq!(n.children()[0].value(), Some(&1));
         assert_eq!(n.children()[1].value(), Some(&2));
 
-        let n = root.find_prefix(b"foo;baz").unwrap();
+        let (prefix_len, n) = root.find_prefix(b"foo;baz").unwrap();
         assert_eq!(n.key(), b"z;");
+        assert_eq!(prefix_len, 6);
         assert_eq!(n.children().len(), 2);
         assert_eq!(n.children()[0].value(), Some(&3));
         assert_eq!(n.children()[1].value(), Some(&4));
@@ -1014,36 +1025,40 @@ mod tests {
 
         let prefix = b"foo;ba";
         for i in 1..=prefix.len() {
-            let n = root.find_prefix_mut(&prefix[..i]).unwrap();
+            let (prefix_len, n) = root.find_prefix_mut(&prefix[..i]).unwrap();
             assert_eq!(n.key(), b"foo;ba");
             assert_eq!(n.children().len(), 2);
+            assert_eq!(prefix_len, 0);
         }
 
         let prefix = b"bar;";
         for i in 1..=prefix.len() {
-            let n = root.find_prefix_mut(&prefix[..i]).unwrap();
+            let (prefix_len, n) = root.find_prefix_mut(&prefix[..i]).unwrap();
             assert_eq!(n.key(), b"bar;");
             assert_eq!(n.children().len(), 2);
-            assert_eq!(n.children()[0].value(), Some(&5));
-            assert_eq!(n.children()[1].value(), Some(&6));
+            assert_eq!(n.children_mut()[0].value_mut(), Some(&mut 5));
+            assert_eq!(n.children_mut()[1].value_mut(), Some(&mut 6));
+            assert_eq!(prefix_len, 0);
         }
 
-        let n = root.find_prefix_mut(b"foo;bar").unwrap();
+        let (prefix_len, n) = root.find_prefix_mut(b"foo;bar").unwrap();
         assert_eq!(n.key(), b"r;");
+        assert_eq!(prefix_len, 6);
         assert_eq!(n.children().len(), 2);
-        assert_eq!(n.children()[0].value(), Some(&1));
-        assert_eq!(n.children()[1].value(), Some(&2));
+        assert_eq!(n.children_mut()[0].value_mut(), Some(&mut 1));
+        assert_eq!(n.children_mut()[1].value_mut(), Some(&mut 2));
 
-        let n = root.find_prefix_mut(b"foo;baz").unwrap();
+        let (prefix_len, n) = root.find_prefix_mut(b"foo;baz").unwrap();
         assert_eq!(n.key(), b"z;");
+        assert_eq!(prefix_len, 6);
         assert_eq!(n.children().len(), 2);
-        assert_eq!(n.children()[0].value(), Some(&3));
-        assert_eq!(n.children()[1].value(), Some(&4));
+        assert_eq!(n.children_mut()[0].value_mut(), Some(&mut 3));
+        assert_eq!(n.children_mut()[1].value_mut(), Some(&mut 4));
 
-        assert!(root.find_prefix_mut(b"goo").is_none());
-        assert!(root.find_prefix_mut(b"fooa").is_none());
-        assert!(root.find_prefix_mut(b"foo;bag").is_none());
-        assert!(root.find_prefix_mut(b"baz").is_none());
-        assert!(root.find_prefix_mut(b"bz").is_none());
+        assert!(root.find_prefix(b"goo").is_none());
+        assert!(root.find_prefix(b"fooa").is_none());
+        assert!(root.find_prefix(b"foo;bag").is_none());
+        assert!(root.find_prefix(b"baz").is_none());
+        assert!(root.find_prefix(b"bz").is_none());
     }
 }

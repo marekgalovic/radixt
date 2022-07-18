@@ -1,6 +1,4 @@
-use std::marker::PhantomData;
-
-use crate::iter::{Iter, IterMut, MapK, MapKV, MapKVMut, MapV, MapVMut};
+use crate::iter::{Iter, IterMap, IterMapMut, IterMut, MapK, MapKV, MapKVMut, MapV, MapVMut};
 use crate::node::Node;
 
 #[derive(Debug)]
@@ -74,7 +72,7 @@ impl<T> RadixMap<T> {
     /// only need to access values consider using .values() instead.
     #[inline(always)]
     pub fn iter(&self) -> Iter<T, MapKV<T>> {
-        Iter::new(Some(&self.root), &[])
+        self.get_iter()
     }
 
     /// Gets a mutable iterator over the entries of the map, sorted by key.
@@ -82,7 +80,7 @@ impl<T> RadixMap<T> {
     /// need to access values consider using .values_mut() instead.
     #[inline(always)]
     pub fn iter_mut(&mut self) -> IterMut<T, MapKVMut<T>> {
-        IterMut::new(Some(&mut self.root), &[])
+        self.get_iter_mut()
     }
 
     /// Gets an iterator over the entries of the map matching a given prefix, sorted by key.
@@ -91,7 +89,7 @@ impl<T> RadixMap<T> {
     /// need to access values consider using .prefix_values(prefix) instead.
     #[inline(always)]
     pub fn prefix_iter<K: AsRef<[u8]>>(&self, prefix: K) -> Iter<T, MapKV<T>> {
-        Iter::new(self.root.find_prefix(prefix.as_ref()), prefix.as_ref())
+        self.get_prefix_iter(prefix)
     }
 
     /// Gets a mutable iterator over the entries of the map matching a given prefix, sorted by key.
@@ -100,48 +98,75 @@ impl<T> RadixMap<T> {
     /// need to access values consider using .prefix_values_mut(prefix) instead.
     #[inline(always)]
     pub fn prefix_iter_mut<K: AsRef<[u8]>>(&mut self, prefix: K) -> IterMut<T, MapKVMut<T>> {
-        IterMut::new(self.root.find_prefix_mut(prefix.as_ref()), prefix.as_ref())
+        self.get_prefix_iter_mut(prefix)
     }
 
     /// Gets an iterator over the values of the map, in order by key.
     #[inline(always)]
     pub fn values(&self) -> Iter<T, MapV<T>> {
-        Iter::new(Some(&self.root), &[])
+        self.get_iter()
     }
 
     /// Gets a mutable iterator over the values of the map, in order by key.
     #[inline(always)]
     pub fn values_mut(&mut self) -> IterMut<T, MapVMut<T>> {
-        IterMut::new(Some(&mut self.root), &[])
+        self.get_iter_mut()
     }
 
     /// Gets an iterator over the values of the map matching a given prefix, in order by key.
     #[inline(always)]
     pub fn prefix_values<K: AsRef<[u8]>>(&self, prefix: K) -> Iter<T, MapV<T>> {
-        Iter::new(self.root.find_prefix(prefix.as_ref()), prefix.as_ref())
+        self.get_prefix_iter(prefix)
     }
 
     /// Gets a mutable iterator over the values of the map matching a given prefix, in order by key.
     #[inline(always)]
     pub fn prefix_values_mut<K: AsRef<[u8]>>(&mut self, prefix: K) -> IterMut<T, MapVMut<T>> {
-        IterMut::new(self.root.find_prefix_mut(prefix.as_ref()), prefix.as_ref())
+        self.get_prefix_iter_mut(prefix)
     }
 
     /// Gets an iterator over the keys of the map, in order by key.
     #[inline(always)]
     pub fn keys(&self) -> Iter<T, MapK<T>> {
-        Iter::new(Some(&self.root), &[])
+        self.get_iter()
     }
 
     /// Gets an iterator over the keys of the map matching a given prefix, in order by key.
     #[inline(always)]
     pub fn prefix_keys<K: AsRef<[u8]>>(&self, prefix: K) -> Iter<T, MapK<T>> {
-        Iter::new(self.root.find_prefix(prefix.as_ref()), prefix.as_ref())
+        self.get_prefix_iter(prefix)
     }
 
-    #[inline(always)]
-    pub(super) fn root(&self) -> &Node<T> {
-        &self.root
+    fn get_iter<'a, M: IterMap<'a, T>>(&'a self) -> Iter<'a, T, M> {
+        Iter::new(Some(&self.root), vec![])
+    }
+
+    fn get_iter_mut<'a, M: IterMapMut<'a, T>>(&'a mut self) -> IterMut<'a, T, M> {
+        IterMut::new(Some(&mut self.root), vec![])
+    }
+
+    fn get_prefix_iter<'a, M: IterMap<'a, T>, K: AsRef<[u8]>>(
+        &'a self,
+        prefix: K,
+    ) -> Iter<'a, T, M> {
+        match self.root.find_prefix(prefix.as_ref()) {
+            Some((prefix_len, prefix_node)) => {
+                Iter::new(Some(prefix_node), prefix.as_ref()[..prefix_len].to_vec())
+            }
+            None => Iter::new(None, vec![]),
+        }
+    }
+
+    fn get_prefix_iter_mut<'a, M: IterMapMut<'a, T>, K: AsRef<[u8]>>(
+        &'a mut self,
+        prefix: K,
+    ) -> IterMut<'a, T, M> {
+        match self.root.find_prefix_mut(prefix.as_ref()) {
+            Some((prefix_len, prefix_node)) => {
+                IterMut::new(Some(prefix_node), prefix.as_ref()[..prefix_len].to_vec())
+            }
+            None => IterMut::new(None, vec![]),
+        }
     }
 }
 
@@ -175,8 +200,7 @@ mod tests {
         assert_eq!(m.get(""), None);
     }
 
-    #[test]
-    fn test_iter() {
+    fn populated_map() -> RadixMap<u32> {
         let mut m = RadixMap::new();
 
         m.insert("cad", 5);
@@ -184,6 +208,13 @@ mod tests {
         m.insert("c", 4);
         m.insert("abb;0", 2);
         m.insert("ab", 3);
+
+        m
+    }
+
+    #[test]
+    fn test_iter() {
+        let m = populated_map();
 
         let mut it = m.iter();
 
@@ -208,13 +239,7 @@ mod tests {
 
     #[test]
     fn test_iter_mut() {
-        let mut m = RadixMap::new();
-
-        m.insert("cad", 5);
-        m.insert("abc;0", 1);
-        m.insert("c", 4);
-        m.insert("abb;0", 2);
-        m.insert("ab", 3);
+        let mut m = populated_map();
 
         let mut it = m.iter_mut();
 
@@ -261,5 +286,105 @@ mod tests {
         assert_eq!(m.get("c"), Some(&4));
         assert_eq!(m.get("abb;0"), Some(&100));
         assert_eq!(m.get("ab"), Some(&3));
+    }
+
+    #[test]
+    fn test_prefix_iter() {
+        let m = populated_map();
+
+        let mut it = m.prefix_iter(b"ab");
+        let (k, v) = it.next().unwrap();
+        assert_eq!(k.as_ref(), b"ab");
+        assert_eq!(v, &3);
+        let (k, v) = it.next().unwrap();
+        assert_eq!(k.as_ref(), b"abb;0");
+        assert_eq!(v, &2);
+        let (k, v) = it.next().unwrap();
+        assert_eq!(k.as_ref(), b"abc;0");
+        assert_eq!(v, &1);
+        assert_eq!(it.next(), None);
+
+        let mut it = m.prefix_iter(b"abb");
+        let (k, v) = it.next().unwrap();
+        assert_eq!(k.as_ref(), b"abb;0");
+        assert_eq!(v, &2);
+        assert_eq!(it.next(), None);
+
+        let mut it = m.prefix_iter(b"c");
+        let (k, v) = it.next().unwrap();
+        assert_eq!(k.as_ref(), b"c");
+        assert_eq!(v, &4);
+        let (k, v) = it.next().unwrap();
+        assert_eq!(k.as_ref(), b"cad");
+        assert_eq!(v, &5);
+        assert_eq!(it.next(), None);
+
+        let mut it = m.prefix_iter(b"ca");
+        let (k, v) = it.next().unwrap();
+        assert_eq!(k.as_ref(), b"cad");
+        assert_eq!(v, &5);
+        assert_eq!(it.next(), None);
+
+        let mut it = m.prefix_iter(b"cad");
+        let (k, v) = it.next().unwrap();
+        assert_eq!(k.as_ref(), b"cad");
+        assert_eq!(v, &5);
+        assert_eq!(it.next(), None);
+
+        let mut it = m.prefix_iter(b"cada");
+        assert_eq!(it.next(), None);
+
+        let mut it = m.prefix_iter(b"abd");
+        assert_eq!(it.next(), None);
+    }
+
+    #[test]
+    fn test_prefix_iter_mut() {
+        let mut m = populated_map();
+
+        let mut it = m.prefix_iter_mut(b"ab");
+        let (k, v) = it.next().unwrap();
+        assert_eq!(k.as_ref(), b"ab");
+        assert_eq!(v, &mut 3);
+        let (k, v) = it.next().unwrap();
+        assert_eq!(k.as_ref(), b"abb;0");
+        assert_eq!(v, &mut 2);
+        let (k, v) = it.next().unwrap();
+        assert_eq!(k.as_ref(), b"abc;0");
+        assert_eq!(v, &mut 1);
+        assert_eq!(it.next(), None);
+
+        let mut it = m.prefix_iter_mut(b"abb");
+        let (k, v) = it.next().unwrap();
+        assert_eq!(k.as_ref(), b"abb;0");
+        assert_eq!(v, &mut 2);
+        assert_eq!(it.next(), None);
+
+        let mut it = m.prefix_iter_mut(b"c");
+        let (k, v) = it.next().unwrap();
+        assert_eq!(k.as_ref(), b"c");
+        assert_eq!(v, &mut 4);
+        let (k, v) = it.next().unwrap();
+        assert_eq!(k.as_ref(), b"cad");
+        assert_eq!(v, &mut 5);
+        assert_eq!(it.next(), None);
+
+        let mut it = m.prefix_iter_mut(b"ca");
+        let (k, v) = it.next().unwrap();
+        assert_eq!(k.as_ref(), b"cad");
+        assert_eq!(v, &mut 5);
+        assert_eq!(it.next(), None);
+
+        let mut it = m.prefix_iter_mut(b"cad");
+        let (k, v) = it.next().unwrap();
+        assert_eq!(k.as_ref(), b"cad");
+        assert_eq!(v, &mut 5);
+        assert_eq!(it.next(), None);
+
+        let mut it = m.prefix_iter_mut(b"cada");
+        assert_eq!(it.next(), None);
+
+        let mut it = m.prefix_iter_mut(b"abd");
+        assert_eq!(it.next(), None);
     }
 }

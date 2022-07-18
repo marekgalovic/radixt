@@ -50,7 +50,7 @@ impl RadixSet {
 
     /// Gets an iterator that visits the elements of this set in ascending order.
     #[inline(always)]
-    pub fn iter(&self) -> Iter<'_, (), MapK<()>> {
+    pub fn iter(&self) -> Iter<(), MapK<()>> {
         self.inner.keys()
     }
 

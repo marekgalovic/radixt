@@ -21,20 +21,15 @@ pub struct Iter<'a, T, M: IterMap<'a, T>> {
 }
 
 impl<'a, T, M: IterMap<'a, T>> Iter<'a, T, M> {
-    pub(crate) fn new(root: Option<&'a Node<T>>, prefix: &[u8]) -> Self {
+    pub(crate) fn new(root: Option<&'a Node<T>>, prefix: Vec<u8>) -> Self {
         let stack = match root {
-            Some(root) => root
-                .children()
-                .iter()
-                .rev()
-                .map(|e| (prefix.len(), e))
-                .collect(),
+            Some(root) => vec![(prefix.len(), root)],
             None => vec![],
         };
 
         Iter {
             stack,
-            prefix: prefix.to_vec(),
+            prefix,
             _marker: PhantomData::default(),
         }
     }
@@ -73,20 +68,15 @@ pub struct IterMut<'a, T, M: IterMapMut<'a, T>> {
 }
 
 impl<'a, T, M: IterMapMut<'a, T>> IterMut<'a, T, M> {
-    pub(crate) fn new(root: Option<&'a mut Node<T>>, prefix: &[u8]) -> Self {
+    pub(crate) fn new(root: Option<&'a mut Node<T>>, prefix: Vec<u8>) -> Self {
         let stack = match root {
-            Some(root) => root
-                .children_mut()
-                .iter_mut()
-                .rev()
-                .map(|e| (prefix.len(), e))
-                .collect(),
+            Some(root) => vec![(prefix.len(), root)],
             None => vec![],
         };
 
         IterMut {
             stack,
-            prefix: prefix.to_vec(),
+            prefix,
             _marker: PhantomData::default(),
         }
     }
