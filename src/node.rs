@@ -18,9 +18,8 @@ bitflags! {
 
 #[derive(Debug)]
 pub struct Node<T> {
-    /// Node flags
-    flags: Flags,
     /// Layout:
+    ///     - flags: u8
     ///     - key_len: u8
     ///     - key: [u8; key_len]
     ///     - value: size_of<T> (optional - Flags::VALUE_ALLOCATED)
@@ -39,12 +38,11 @@ impl<T> Node<T> {
         let data = Self::alloc(flags, key.len());
         // Write key
         unsafe {
-            ptr::write(data.as_ptr(), key.len() as u8);
-            ptr::copy(key.as_ptr(), data.as_ptr().add(1), key.len());
+            ptr::write(data.as_ptr().add(1), key.len() as u8);
+            ptr::copy(key.as_ptr(), data.as_ptr().add(2), key.len());
         }
 
         Node {
-            flags,
             data,
             _phantom: PhantomData::default(),
         }
@@ -56,18 +54,17 @@ impl<T> Node<T> {
         // Allocate
         let mut flags = Flags::empty();
         flags.set(Flags::VALUE_ALLOCATED, true);
+        flags.set(Flags::VALUE_INITIALIZED, true);
         let data = Self::alloc(flags, key.len());
         unsafe {
             // Write key
-            ptr::write(data.as_ptr(), key.len() as u8);
-            ptr::copy(key.as_ptr(), data.as_ptr().add(1), key.len());
+            ptr::write(data.as_ptr().add(1), key.len() as u8);
+            ptr::copy(key.as_ptr(), data.as_ptr().add(2), key.len());
             // Write value
-            ptr::write(data.as_ptr().add(1 + key.len()) as *mut T, value);
+            ptr::write(data.as_ptr().add(2 + key.len()) as *mut T, value);
         }
-        flags.set(Flags::VALUE_INITIALIZED, true);
 
         Node {
-            flags,
             data,
             _phantom: PhantomData::default(),
         }
@@ -81,7 +78,7 @@ impl<T> Node<T> {
 
     #[inline(always)]
     pub(crate) fn value(&self) -> Option<&T> {
-        if self.flags.contains(Flags::VALUE_INITIALIZED) {
+        if self.flags().contains(Flags::VALUE_INITIALIZED) {
             return unsafe { Some(&*self.value_ptr()) };
         }
         None
@@ -89,7 +86,7 @@ impl<T> Node<T> {
 
     #[inline(always)]
     pub(crate) fn value_mut(&mut self) -> Option<&mut T> {
-        if self.flags.contains(Flags::VALUE_INITIALIZED) {
+        if self.flags().contains(Flags::VALUE_INITIALIZED) {
             return unsafe { Some(&mut *self.value_ptr()) };
         }
         None
@@ -97,7 +94,7 @@ impl<T> Node<T> {
 
     #[inline(always)]
     pub(crate) fn children(&self) -> &[Node<T>] {
-        if !self.flags.contains(Flags::HAS_CHILDREN) {
+        if !self.flags().contains(Flags::HAS_CHILDREN) {
             return &[];
         }
 
@@ -106,7 +103,7 @@ impl<T> Node<T> {
 
     #[inline(always)]
     pub(crate) fn children_mut(&self) -> &mut [Node<T>] {
-        if !self.flags.contains(Flags::HAS_CHILDREN) {
+        if !self.flags().contains(Flags::HAS_CHILDREN) {
             return &mut [];
         }
 
@@ -246,7 +243,7 @@ impl<T> Node<T> {
     // Memory management
     #[inline(always)]
     fn create_layout(flags: Flags, key_len: usize, children_count: usize) -> Layout {
-        let mut layout = Layout::array::<u8>(key_len + 1).expect("invalid layout");
+        let mut layout = Layout::array::<u8>(key_len + 2).expect("invalid layout");
 
         if flags.contains(Flags::VALUE_ALLOCATED) {
             layout = layout.extend(Layout::new::<T>()).expect("invalid layout").0;
@@ -267,15 +264,31 @@ impl<T> Node<T> {
     }
 
     #[inline(always)]
+    fn flags(&self) -> Flags {
+        unsafe { Flags::from_bits(*self.data.as_ptr()).unwrap() }
+    }
+
+    #[inline(always)]
+    fn set_flags(&self, other: Flags, value: bool) {
+        let mut flags = self.flags().clone();
+        flags.set(other, value);
+        unsafe { ptr::write(self.data.as_ptr(), flags.bits()) }
+    }
+
+    #[inline(always)]
     fn curr_layout(&self) -> Layout {
-        Self::create_layout(self.flags, self.key_len(), self.children().len())
+        Self::create_layout(self.flags(), self.key_len(), self.children().len())
     }
 
     #[inline(always)]
     fn alloc(flags: Flags, key_len: usize) -> ptr::NonNull<u8> {
         let layout = Self::create_layout(flags, key_len, 0);
         let ptr = unsafe { alloc(layout) };
-        ptr::NonNull::new(ptr).expect("allocation failed")
+        let data = ptr::NonNull::new(ptr).expect("allocation failed");
+        unsafe {
+            ptr::write(data.as_ptr(), flags.bits());
+        }
+        data
     }
 
     #[inline(always)]
@@ -289,16 +302,18 @@ impl<T> Node<T> {
         let new_layout = Self::create_layout(new_flags, key_len, children_count);
         let new_ptr = unsafe { realloc(self.data.as_ptr(), old_layout, new_layout.size()) };
         self.data = ptr::NonNull::new(new_ptr).expect("allocation failed");
-        self.flags = new_flags;
+        unsafe {
+            ptr::write(self.data.as_ptr(), new_flags.bits());
+        }
     }
 
     #[inline(always)]
     fn data_size(&self) -> usize {
-        let mut size = 1 + self.key_len();
-        if self.flags.contains(Flags::VALUE_ALLOCATED) {
+        let mut size = 2 + self.key_len();
+        if self.flags().contains(Flags::VALUE_ALLOCATED) {
             size += size_of::<T>();
         }
-        if self.flags.contains(Flags::HAS_CHILDREN) {
+        if self.flags().contains(Flags::HAS_CHILDREN) {
             size += 1 + self.children().len() * size_of::<Node<T>>();
         }
         size
@@ -306,30 +321,30 @@ impl<T> Node<T> {
 
     #[inline(always)]
     fn key_len(&self) -> usize {
-        unsafe { *self.data.as_ptr() as usize }
+        unsafe { *self.key_len_ptr() as usize }
     }
 
     #[inline(always)]
     unsafe fn key_len_ptr(&self) -> *mut u8 {
-        self.data.as_ptr()
-    }
-
-    #[inline(always)]
-    unsafe fn key_ptr(&self) -> *mut u8 {
         self.data.as_ptr().add(1)
     }
 
     #[inline(always)]
+    unsafe fn key_ptr(&self) -> *mut u8 {
+        self.data.as_ptr().add(2)
+    }
+
+    #[inline(always)]
     unsafe fn value_ptr(&self) -> *mut T {
-        assert!(self.flags.contains(Flags::VALUE_ALLOCATED));
-        self.data.as_ptr().add(1 + self.key_len()) as *mut T
+        assert!(self.flags().contains(Flags::VALUE_ALLOCATED));
+        self.data.as_ptr().add(2 + self.key_len()) as *mut T
     }
 
     #[inline(always)]
     unsafe fn children_len_ptr(&self) -> *mut u8 {
-        assert!(self.flags.contains(Flags::HAS_CHILDREN));
-        let mut ptr = self.data.as_ptr().add(1 + self.key_len());
-        if self.flags.contains(Flags::VALUE_ALLOCATED) {
+        assert!(self.flags().contains(Flags::HAS_CHILDREN));
+        let mut ptr = self.data.as_ptr().add(2 + self.key_len());
+        if self.flags().contains(Flags::VALUE_ALLOCATED) {
             ptr = ptr.add(size_of::<T>());
         }
         ptr
@@ -347,17 +362,14 @@ impl<T> Node<T> {
 
         let old_layout = self.curr_layout();
         let new_key_len = self.key_len() - prefix_len;
-        let copy_size = self.data_size() - prefix_len - 1;
-        // Shift left
+        let copy_size = self.data_size() - prefix_len - 2;
         unsafe {
+            // Write new length
             ptr::write(self.key_len_ptr(), new_key_len as u8);
-            ptr::copy(
-                self.data.as_ptr().add(1 + prefix_len),
-                self.key_ptr(),
-                copy_size,
-            )
+            // Shift left
+            ptr::copy(self.key_ptr().add(prefix_len), self.key_ptr(), copy_size)
         }
-        self.realloc(old_layout, self.flags, new_key_len, self.children().len());
+        self.realloc(old_layout, self.flags(), new_key_len, self.children().len());
     }
 
     #[inline]
@@ -367,7 +379,7 @@ impl<T> Node<T> {
 
         self.realloc(
             self.curr_layout(),
-            self.flags,
+            self.flags(),
             new_key_len,
             self.children().len(),
         );
@@ -375,14 +387,14 @@ impl<T> Node<T> {
         unsafe {
             // Shift value + children right
             ptr::copy(
-                self.data.as_ptr().add(1 + self.key_len()),
-                self.data.as_ptr().add(1 + new_key_len),
-                self.data_size() - self.key_len() - 1,
+                self.key_ptr().add(self.key_len()),
+                self.key_ptr().add(new_key_len),
+                self.data_size() - self.key_len() - 2,
             );
             // Extend key
             ptr::copy(
                 suffix.as_ptr(),
-                self.data.as_ptr().add(1 + self.key_len()),
+                self.key_ptr().add(self.key_len()),
                 suffix.len(),
             );
             // Write new key length
@@ -393,8 +405,8 @@ impl<T> Node<T> {
     // Value access methods
     #[inline]
     fn take_value(&mut self) -> Option<T> {
-        if self.flags.contains(Flags::VALUE_INITIALIZED) {
-            self.flags.set(Flags::VALUE_INITIALIZED, false);
+        if self.flags().contains(Flags::VALUE_INITIALIZED) {
+            self.set_flags(Flags::VALUE_INITIALIZED, false);
             Some(unsafe { ptr::read(self.value_ptr()) })
         } else {
             None
@@ -403,11 +415,11 @@ impl<T> Node<T> {
 
     #[inline]
     fn replace_value(&mut self, value: T) -> Option<T> {
-        if !self.flags.contains(Flags::VALUE_ALLOCATED) {
+        if !self.flags().contains(Flags::VALUE_ALLOCATED) {
             // Allocate value if it's not allocated
             let children_count = self.children().len();
 
-            let mut new_flags = self.flags.clone();
+            let mut new_flags = self.flags().clone();
             new_flags.set(Flags::VALUE_ALLOCATED, true);
             self.realloc(
                 self.curr_layout(),
@@ -416,7 +428,7 @@ impl<T> Node<T> {
                 children_count,
             );
 
-            if self.flags.contains(Flags::HAS_CHILDREN) {
+            if self.flags().contains(Flags::HAS_CHILDREN) {
                 // Move children to the right to make space for value
                 unsafe {
                     ptr::copy(
@@ -428,7 +440,7 @@ impl<T> Node<T> {
             }
         }
 
-        if self.flags.contains(Flags::VALUE_INITIALIZED) {
+        if self.flags().contains(Flags::VALUE_INITIALIZED) {
             // Replace old value
             Some(unsafe { std::mem::replace::<T>(&mut *self.value_ptr(), value) })
         } else {
@@ -436,7 +448,7 @@ impl<T> Node<T> {
             unsafe {
                 ptr::write(self.value_ptr(), value);
             }
-            self.flags.set(Flags::VALUE_INITIALIZED, true);
+            self.set_flags(Flags::VALUE_INITIALIZED, true);
             None
         }
     }
@@ -458,9 +470,9 @@ impl<T> Node<T> {
         assert!(idx <= self.children().len(), "invalid offset");
         assert!(self.children().len() < 256, "Children array is full");
 
-        if !self.flags.contains(Flags::HAS_CHILDREN) {
+        if !self.flags().contains(Flags::HAS_CHILDREN) {
             // Allocate children
-            let mut new_flags = self.flags.clone();
+            let mut new_flags = self.flags().clone();
             new_flags.set(Flags::HAS_CHILDREN, true);
             self.realloc(self.curr_layout(), new_flags, self.key_len(), 1);
             // Insert at 0th position
@@ -472,7 +484,7 @@ impl<T> Node<T> {
             // Grow
             self.realloc(
                 self.curr_layout(),
-                self.flags,
+                self.flags(),
                 self.key_len(),
                 self.children().len() + 1,
             );
@@ -503,11 +515,11 @@ impl<T> Node<T> {
     fn remove_child(&mut self, idx: usize) -> Node<T> {
         assert!(idx < self.children().len(), "invalid offset");
 
-        if self.flags.contains(Flags::HAS_CHILDREN) {
+        if self.flags().contains(Flags::HAS_CHILDREN) {
             let removed = unsafe { ptr::read(self.children_ptr().add(idx)) };
             if self.children().len() == 1 {
                 // Deallocate children
-                let mut new_flags = self.flags.clone();
+                let mut new_flags = self.flags().clone();
                 new_flags.set(Flags::HAS_CHILDREN, false);
                 self.realloc(self.curr_layout(), new_flags, self.key_len(), 0);
             } else {
@@ -526,7 +538,7 @@ impl<T> Node<T> {
                 // Shrink
                 self.realloc(
                     self.curr_layout(),
-                    self.flags,
+                    self.flags(),
                     self.key_len(),
                     self.children().len(),
                 );
@@ -551,7 +563,7 @@ impl<T> Node<T> {
         }
 
         // Allocate children
-        let mut new_flags = self.flags.clone();
+        let mut new_flags = self.flags().clone();
         new_flags.set(Flags::HAS_CHILDREN, true);
         self.realloc(self.curr_layout(), new_flags, self.key_len(), src_count);
 
@@ -565,7 +577,7 @@ impl<T> Node<T> {
         }
 
         // Deallocate src node children
-        let mut new_src_flags = src_node.flags.clone();
+        let mut new_src_flags = src_node.flags().clone();
         new_src_flags.set(Flags::HAS_CHILDREN, false);
         src_node.realloc(src_node.curr_layout(), new_src_flags, src_node.key_len(), 0);
     }
@@ -591,11 +603,11 @@ impl<T> Node<T> {
 
 impl<T> Drop for Node<T> {
     fn drop(&mut self) {
-        if self.flags.contains(Flags::VALUE_INITIALIZED) {
+        if self.flags().contains(Flags::VALUE_INITIALIZED) {
             // Drop value
             let _value = unsafe { ptr::read(self.data.as_ptr().add(1 + self.key_len()) as *mut T) };
         }
-        if self.flags.contains(Flags::HAS_CHILDREN) {
+        if self.flags().contains(Flags::HAS_CHILDREN) {
             // Drop children
             unsafe {
                 let node_ptr = self.children_ptr();
@@ -647,9 +659,9 @@ mod tests {
     fn test_new() {
         let node: Node<()> = Node::new(&[1, 2, 3]);
         assert_eq!(node.key(), &[1, 2, 3]);
-        assert!(!node.flags.contains(Flags::VALUE_ALLOCATED));
-        assert!(!node.flags.contains(Flags::VALUE_INITIALIZED));
-        assert!(!node.flags.contains(Flags::HAS_CHILDREN));
+        assert!(!node.flags().contains(Flags::VALUE_ALLOCATED));
+        assert!(!node.flags().contains(Flags::VALUE_INITIALIZED));
+        assert!(!node.flags().contains(Flags::HAS_CHILDREN));
     }
 
     #[test]
@@ -660,36 +672,36 @@ mod tests {
 
         assert_eq!(node.key(), &[1, 2, 3]);
         assert_eq!(node.value(), None);
-        assert!(!node.flags.contains(Flags::VALUE_ALLOCATED));
-        assert!(!node.flags.contains(Flags::VALUE_INITIALIZED));
-        assert!(node.flags.contains(Flags::HAS_CHILDREN));
+        assert!(!node.flags().contains(Flags::VALUE_ALLOCATED));
+        assert!(!node.flags().contains(Flags::VALUE_INITIALIZED));
+        assert!(node.flags().contains(Flags::HAS_CHILDREN));
         assert_eq!(node.children().len(), 2);
         assert_eq!(node.children()[0].key(), &[1]);
         assert_eq!(node.children()[1].key(), &[2]);
 
         assert_eq!(node.replace_value(123), None);
         assert_eq!(node.value(), Some(&123));
-        assert!(node.flags.contains(Flags::VALUE_ALLOCATED));
-        assert!(node.flags.contains(Flags::VALUE_INITIALIZED));
-        assert!(node.flags.contains(Flags::HAS_CHILDREN));
+        assert!(node.flags().contains(Flags::VALUE_ALLOCATED));
+        assert!(node.flags().contains(Flags::VALUE_INITIALIZED));
+        assert!(node.flags().contains(Flags::HAS_CHILDREN));
         assert_eq!(node.children().len(), 2);
         assert_eq!(node.children()[0].key(), &[1]);
         assert_eq!(node.children()[1].key(), &[2]);
 
         assert_eq!(node.replace_value(456), Some(123));
         assert_eq!(node.value(), Some(&456));
-        assert!(node.flags.contains(Flags::VALUE_ALLOCATED));
-        assert!(node.flags.contains(Flags::VALUE_INITIALIZED));
-        assert!(node.flags.contains(Flags::HAS_CHILDREN));
+        assert!(node.flags().contains(Flags::VALUE_ALLOCATED));
+        assert!(node.flags().contains(Flags::VALUE_INITIALIZED));
+        assert!(node.flags().contains(Flags::HAS_CHILDREN));
         assert_eq!(node.children().len(), 2);
         assert_eq!(node.children()[0].key(), &[1]);
         assert_eq!(node.children()[1].key(), &[2]);
 
         assert_eq!(node.take_value(), Some(456));
         assert_eq!(node.value(), None);
-        assert!(node.flags.contains(Flags::VALUE_ALLOCATED));
-        assert!(!node.flags.contains(Flags::VALUE_INITIALIZED));
-        assert!(node.flags.contains(Flags::HAS_CHILDREN));
+        assert!(node.flags().contains(Flags::VALUE_ALLOCATED));
+        assert!(!node.flags().contains(Flags::VALUE_INITIALIZED));
+        assert!(node.flags().contains(Flags::HAS_CHILDREN));
         assert_eq!(node.children().len(), 2);
         assert_eq!(node.children()[0].key(), &[1]);
         assert_eq!(node.children()[1].key(), &[2]);
@@ -703,9 +715,9 @@ mod tests {
 
         assert_eq!(node.key(), &[1, 2, 3, 4, 5]);
         assert_eq!(node.value(), Some(&123));
-        assert!(node.flags.contains(Flags::VALUE_ALLOCATED));
-        assert!(node.flags.contains(Flags::VALUE_INITIALIZED));
-        assert!(node.flags.contains(Flags::HAS_CHILDREN));
+        assert!(node.flags().contains(Flags::VALUE_ALLOCATED));
+        assert!(node.flags().contains(Flags::VALUE_INITIALIZED));
+        assert!(node.flags().contains(Flags::HAS_CHILDREN));
         assert_eq!(node.children().len(), 2);
         assert_eq!(node.children()[0].key(), &[1]);
         assert_eq!(node.children()[1].key(), &[2]);
@@ -713,9 +725,9 @@ mod tests {
         node.strip_key_prefix(2);
         assert_eq!(node.key(), &[3, 4, 5]);
         assert_eq!(node.value(), Some(&123));
-        assert!(node.flags.contains(Flags::VALUE_ALLOCATED));
-        assert!(node.flags.contains(Flags::VALUE_INITIALIZED));
-        assert!(node.flags.contains(Flags::HAS_CHILDREN));
+        assert!(node.flags().contains(Flags::VALUE_ALLOCATED));
+        assert!(node.flags().contains(Flags::VALUE_INITIALIZED));
+        assert!(node.flags().contains(Flags::HAS_CHILDREN));
         assert_eq!(node.children().len(), 2);
         assert_eq!(node.children()[0].key(), &[1]);
         assert_eq!(node.children()[1].key(), &[2]);
@@ -723,9 +735,9 @@ mod tests {
         node.extend_key(&[6, 7, 8]);
         assert_eq!(node.key(), &[3, 4, 5, 6, 7, 8]);
         assert_eq!(node.value(), Some(&123));
-        assert!(node.flags.contains(Flags::VALUE_ALLOCATED));
-        assert!(node.flags.contains(Flags::VALUE_INITIALIZED));
-        assert!(node.flags.contains(Flags::HAS_CHILDREN));
+        assert!(node.flags().contains(Flags::VALUE_ALLOCATED));
+        assert!(node.flags().contains(Flags::VALUE_INITIALIZED));
+        assert!(node.flags().contains(Flags::HAS_CHILDREN));
         assert_eq!(node.children().len(), 2);
         assert_eq!(node.children()[0].key(), &[1]);
         assert_eq!(node.children()[1].key(), &[2]);
@@ -824,11 +836,11 @@ mod tests {
     #[test]
     fn test_children_add() {
         let mut node: Node<()> = Node::new(&[]);
-        assert!(!node.flags.contains(Flags::HAS_CHILDREN));
+        assert!(!node.flags().contains(Flags::HAS_CHILDREN));
 
         // Push
         node.push_child(Node::new(&[]));
-        assert!(node.flags.contains(Flags::HAS_CHILDREN));
+        assert!(node.flags().contains(Flags::HAS_CHILDREN));
         assert_eq!(node.children().len(), 1);
         assert_eq!(node.children()[0].key(), &[]);
 
@@ -900,7 +912,7 @@ mod tests {
         node.push_child(Node::new(&[4, 5]));
 
         assert_eq!(node.children().len(), 5);
-        assert!(node.flags.contains(Flags::HAS_CHILDREN));
+        assert!(node.flags().contains(Flags::HAS_CHILDREN));
         assert_eq!(node.children()[0].key(), &[0, 1]);
         assert_eq!(node.children()[1].key(), &[1, 2]);
         assert_eq!(node.children()[2].key(), &[2, 3]);
@@ -909,7 +921,7 @@ mod tests {
 
         // Remove first
         assert_eq!(node.remove_child(0).key(), &[0, 1]);
-        assert!(node.flags.contains(Flags::HAS_CHILDREN));
+        assert!(node.flags().contains(Flags::HAS_CHILDREN));
         assert_eq!(node.children().len(), 4);
         assert_eq!(node.children()[0].key(), &[1, 2]);
         assert_eq!(node.children()[1].key(), &[2, 3]);
@@ -918,7 +930,7 @@ mod tests {
 
         // Remove last
         assert_eq!(node.remove_child(3).key(), &[4, 5]);
-        assert!(node.flags.contains(Flags::HAS_CHILDREN));
+        assert!(node.flags().contains(Flags::HAS_CHILDREN));
         assert_eq!(node.children().len(), 3);
         assert_eq!(node.children()[0].key(), &[1, 2]);
         assert_eq!(node.children()[1].key(), &[2, 3]);
@@ -926,14 +938,14 @@ mod tests {
 
         // Remove mid
         assert_eq!(node.remove_child(1).key(), &[2, 3]);
-        assert!(node.flags.contains(Flags::HAS_CHILDREN));
+        assert!(node.flags().contains(Flags::HAS_CHILDREN));
         assert_eq!(node.children().len(), 2);
         assert_eq!(node.children()[0].key(), &[1, 2]);
         assert_eq!(node.children()[1].key(), &[3, 4]);
 
         // Remove mid
         assert_eq!(node.remove_child(1).key(), &[3, 4]);
-        assert!(node.flags.contains(Flags::HAS_CHILDREN));
+        assert!(node.flags().contains(Flags::HAS_CHILDREN));
         assert_eq!(node.children().len(), 1);
         assert_eq!(node.children()[0].key(), &[1, 2]);
     }
@@ -961,7 +973,7 @@ mod tests {
 
         assert_eq!(node.remove_child(0).key(), &[0, 1]);
         assert_eq!(node.children().len(), 0);
-        assert!(!node.flags.contains(Flags::HAS_CHILDREN));
+        assert!(!node.flags().contains(Flags::HAS_CHILDREN));
     }
 
     #[test]
