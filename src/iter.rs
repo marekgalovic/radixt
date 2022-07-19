@@ -39,7 +39,7 @@ impl<'a, T, M: IterMap<'a, T>> Iter<'a, T, M> {
 
     /// Returns a reference to current key.
     /// This key is only valid until .next() is called again.
-    fn curr_key(&self) -> &[u8] {
+    pub(crate) fn curr_key(&self) -> &[u8] {
         &self.prefix
     }
 }

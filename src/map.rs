@@ -188,6 +188,11 @@ impl<T> RadixMap<T> {
             None => IterMut::new(None, vec![]),
         }
     }
+
+    #[inline(always)]
+    pub(crate) fn root(&self) -> &Node<T> {
+        &self.root
+    }
 }
 
 #[cfg(test)]

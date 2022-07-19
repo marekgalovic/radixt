@@ -1,4 +1,4 @@
-use crate::iter::{Iter, MapK};
+use crate::iter::{Iter, MapK, MapV};
 use crate::map::RadixMap;
 
 #[derive(Debug)]
@@ -58,6 +58,134 @@ impl RadixSet {
     #[inline(always)]
     pub fn prefix_iter<K: AsRef<[u8]>>(&self, prefix: K) -> Iter<(), MapK<()>> {
         self.inner.prefix_keys(prefix)
+    }
+
+    #[inline(always)]
+    pub fn intersection<'a, 'b>(&'a self, other: &'b RadixSet) -> Intersection<'a, 'b> {
+        Intersection::new(self, other)
+    }
+
+    #[inline(always)]
+    pub fn union<'a, 'b>(&'a self, other: &'b RadixSet) -> Union<'a, 'b> {
+        Union::new(self, other)
+    }
+}
+
+pub struct Intersection<'a, 'b> {
+    left: Iter<'a, (), MapV<'a, ()>>,
+    right: Iter<'b, (), MapV<'b, ()>>,
+}
+
+impl<'a, 'b> Intersection<'a, 'b> {
+    fn new(left: &'a RadixSet, right: &'b RadixSet) -> Self {
+        Intersection {
+            left: Iter::new(Some(left.inner.root()), vec![]),
+            right: Iter::new(Some(right.inner.root()), vec![]),
+        }
+    }
+}
+
+impl<'a, 'b> Iterator for Intersection<'a, 'b> {
+    type Item = Box<[u8]>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.left.next().is_none() {
+            return None;
+        }
+        if self.right.next().is_none() {
+            return None;
+        }
+        let mut lk = self.left.curr_key();
+        let mut rk = self.right.curr_key();
+        // Advance the left iterator until it's key is smaller than
+        // right's iterator key.
+        while lk < rk {
+            if self.left.next().is_none() {
+                return None;
+            }
+            lk = self.left.curr_key();
+        }
+        // Advance the right iterator until it's key is smaller than
+        // left's iterator key.
+        while rk < lk {
+            if self.right.next().is_none() {
+                return None;
+            }
+            rk = self.right.curr_key();
+        }
+        Some(lk.into())
+    }
+}
+
+pub struct Union<'a, 'b> {
+    left: Iter<'a, (), MapV<'a, ()>>,
+    left_key: Option<Box<[u8]>>,
+    right: Iter<'b, (), MapV<'b, ()>>,
+    right_key: Option<Box<[u8]>>,
+}
+
+impl<'a, 'b> Union<'a, 'b> {
+    fn new(left: &'a RadixSet, right: &'b RadixSet) -> Self {
+        Union {
+            left: Iter::new(Some(left.inner.root()), vec![]),
+            left_key: None,
+            right: Iter::new(Some(right.inner.root()), vec![]),
+            right_key: None,
+        }
+    }
+}
+
+impl<'a, 'b> Iterator for Union<'a, 'b> {
+    type Item = Box<[u8]>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(lk) = self.left_key.as_ref() {
+            if self.right.next().is_some() {
+                let rk = self.right.curr_key();
+                if rk < lk {
+                    return Some(rk.into());
+                }
+                if rk > lk {
+                    self.right_key = Some(rk.into());
+                }
+            }
+            return Some(self.left_key.take().unwrap());
+        }
+        if let Some(rk) = self.right_key.as_ref() {
+            if self.left.next().is_some() {
+                let lk = self.left.curr_key();
+                if lk < rk {
+                    return Some(lk.into());
+                }
+                if lk > rk {
+                    self.left_key = Some(lk.into());
+                }
+            }
+            return Some(self.right_key.take().unwrap());
+        }
+
+        if self.left.next().is_none() {
+            if self.right.next().is_some() {
+                return Some(self.right.curr_key().into());
+            }
+            return None;
+        }
+        let lk = self.left.curr_key();
+
+        if self.right.next().is_none() {
+            return Some(lk.into());
+        }
+        let rk = self.right.curr_key();
+
+        if lk < rk {
+            self.right_key = Some(rk.into());
+            return Some(lk.into());
+        }
+        if rk < lk {
+            self.left_key = Some(lk.into());
+            return Some(rk.into());
+        }
+        Some(lk.into())
     }
 }
 
@@ -189,5 +317,206 @@ mod tests {
 
         let mut it = set.prefix_iter(b"abd");
         assert_eq!(it.next(), None);
+    }
+
+    #[test]
+    fn test_intersection_partial() {
+        // Left then right
+        let mut left = RadixSet::new();
+        left.insert("aa");
+        left.insert("ab");
+        left.insert("ac");
+
+        let mut right = RadixSet::new();
+        right.insert("ab");
+        right.insert("ac");
+        right.insert("ad");
+
+        let intersection: Vec<Box<[u8]>> = left.intersection(&right).collect();
+        assert_eq!(intersection.len(), 2);
+        assert_eq!(intersection[0].as_ref(), b"ab");
+        assert_eq!(intersection[1].as_ref(), b"ac");
+
+        // Left right then left
+        let intersection: Vec<Box<[u8]>> = right.intersection(&left).collect();
+        assert_eq!(intersection.len(), 2);
+        assert_eq!(intersection[0].as_ref(), b"ab");
+        assert_eq!(intersection[1].as_ref(), b"ac");
+    }
+
+    #[test]
+    fn test_intersection_full() {
+        // Left then right
+        let mut left = RadixSet::new();
+        left.insert("aa");
+        left.insert("ab");
+        left.insert("ac");
+
+        let mut right = RadixSet::new();
+        right.insert("aa");
+        right.insert("ab");
+        right.insert("ac");
+
+        let intersection: Vec<Box<[u8]>> = left.intersection(&right).collect();
+        assert_eq!(intersection.len(), 3);
+        assert_eq!(intersection[0].as_ref(), b"aa");
+        assert_eq!(intersection[1].as_ref(), b"ab");
+        assert_eq!(intersection[2].as_ref(), b"ac");
+
+        let intersection: Vec<Box<[u8]>> = right.intersection(&left).collect();
+        assert_eq!(intersection.len(), 3);
+        assert_eq!(intersection[0].as_ref(), b"aa");
+        assert_eq!(intersection[1].as_ref(), b"ab");
+        assert_eq!(intersection[2].as_ref(), b"ac");
+    }
+
+    #[test]
+    fn test_intersection_empty() {
+        // Left then right
+        let mut left = RadixSet::new();
+        left.insert("aa");
+        left.insert("ab");
+        left.insert("ac");
+
+        let mut right = RadixSet::new();
+        right.insert("ad");
+        right.insert("ae");
+        right.insert("af");
+
+        let intersection: Vec<Box<[u8]>> = left.intersection(&right).collect();
+        assert_eq!(intersection.len(), 0);
+
+        let intersection: Vec<Box<[u8]>> = right.intersection(&left).collect();
+        assert_eq!(intersection.len(), 0);
+    }
+
+    #[test]
+    fn test_union_partial_overlap() {
+        let mut left = RadixSet::new();
+        left.insert("aa");
+        left.insert("ab");
+        left.insert("ac");
+
+        let mut right = RadixSet::new();
+        right.insert("ab");
+        right.insert("ac");
+        right.insert("ad");
+
+        let union: Vec<Box<[u8]>> = left.union(&right).collect();
+        assert_eq!(union.len(), 4);
+        assert_eq!(union[0].as_ref(), b"aa");
+        assert_eq!(union[1].as_ref(), b"ab");
+        assert_eq!(union[2].as_ref(), b"ac");
+        assert_eq!(union[3].as_ref(), b"ad");
+
+        let union: Vec<Box<[u8]>> = right.union(&left).collect();
+        assert_eq!(union.len(), 4);
+        assert_eq!(union[0].as_ref(), b"aa");
+        assert_eq!(union[1].as_ref(), b"ab");
+        assert_eq!(union[2].as_ref(), b"ac");
+        assert_eq!(union[3].as_ref(), b"ad");
+    }
+
+    #[test]
+    fn test_union_interleaved() {
+        let mut left = RadixSet::new();
+        left.insert("aa");
+        left.insert("ac");
+        left.insert("ae");
+
+        let mut right = RadixSet::new();
+        right.insert("ab");
+        right.insert("ad");
+        right.insert("af");
+
+        let union: Vec<Box<[u8]>> = left.union(&right).collect();
+        assert_eq!(union.len(), 6);
+        assert_eq!(union[0].as_ref(), b"aa");
+        assert_eq!(union[1].as_ref(), b"ab");
+        assert_eq!(union[2].as_ref(), b"ac");
+        assert_eq!(union[3].as_ref(), b"ad");
+        assert_eq!(union[4].as_ref(), b"ae");
+        assert_eq!(union[5].as_ref(), b"af");
+
+        let union: Vec<Box<[u8]>> = right.union(&left).collect();
+        assert_eq!(union.len(), 6);
+        assert_eq!(union[0].as_ref(), b"aa");
+        assert_eq!(union[1].as_ref(), b"ab");
+        assert_eq!(union[2].as_ref(), b"ac");
+        assert_eq!(union[3].as_ref(), b"ad");
+        assert_eq!(union[4].as_ref(), b"ae");
+        assert_eq!(union[5].as_ref(), b"af");
+    }
+
+    #[test]
+    fn test_union_full_overlap() {
+        let mut left = RadixSet::new();
+        left.insert("aa");
+        left.insert("ab");
+        left.insert("ac");
+
+        let mut right = RadixSet::new();
+        right.insert("aa");
+        right.insert("ab");
+        right.insert("ac");
+
+        let union: Vec<Box<[u8]>> = left.union(&right).collect();
+        assert_eq!(union.len(), 3);
+        assert_eq!(union[0].as_ref(), b"aa");
+        assert_eq!(union[1].as_ref(), b"ab");
+        assert_eq!(union[2].as_ref(), b"ac");
+    }
+
+    #[test]
+    fn test_union_no_overlap() {
+        let mut left = RadixSet::new();
+        left.insert("aa");
+        left.insert("ab");
+        left.insert("ac");
+
+        let mut right = RadixSet::new();
+        right.insert("ae");
+        right.insert("af");
+        right.insert("ag");
+
+        let union: Vec<Box<[u8]>> = left.union(&right).collect();
+        assert_eq!(union.len(), 6);
+        assert_eq!(union[0].as_ref(), b"aa");
+        assert_eq!(union[1].as_ref(), b"ab");
+        assert_eq!(union[2].as_ref(), b"ac");
+        assert_eq!(union[3].as_ref(), b"ae");
+        assert_eq!(union[4].as_ref(), b"af");
+        assert_eq!(union[5].as_ref(), b"ag");
+
+        let union: Vec<Box<[u8]>> = right.union(&left).collect();
+        assert_eq!(union.len(), 6);
+        assert_eq!(union[0].as_ref(), b"aa");
+        assert_eq!(union[1].as_ref(), b"ab");
+        assert_eq!(union[2].as_ref(), b"ac");
+        assert_eq!(union[3].as_ref(), b"ae");
+        assert_eq!(union[4].as_ref(), b"af");
+        assert_eq!(union[5].as_ref(), b"ag");
+
+        left.insert("ad");
+
+        let union: Vec<Box<[u8]>> = left.union(&right).collect();
+        assert_eq!(union.len(), 7);
+        assert_eq!(union[0].as_ref(), b"aa");
+        assert_eq!(union[1].as_ref(), b"ab");
+        assert_eq!(union[2].as_ref(), b"ac");
+        assert_eq!(union[3].as_ref(), b"ad");
+        assert_eq!(union[4].as_ref(), b"ae");
+        assert_eq!(union[5].as_ref(), b"af");
+        assert_eq!(union[6].as_ref(), b"ag");
+
+        let union: Vec<Box<[u8]>> = right.union(&left).collect();
+        assert_eq!(union.len(), 7);
+        assert_eq!(union[0].as_ref(), b"aa");
+        assert_eq!(union[1].as_ref(), b"ab");
+        assert_eq!(union[2].as_ref(), b"ac");
+        assert_eq!(union[3].as_ref(), b"ad");
+        assert_eq!(union[4].as_ref(), b"ae");
+        assert_eq!(union[5].as_ref(), b"af");
+        assert_eq!(union[6].as_ref(), b"ag");
     }
 }
