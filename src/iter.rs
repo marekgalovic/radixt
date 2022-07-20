@@ -178,10 +178,10 @@ impl<'a, T, K: AsRef<[u8]>, B: RangeBounds<K>> Iterator for Range<'a, T, K, B> {
         match self.iter.next() {
             Some(v) => {
                 let k = self.iter.curr_key();
-                if !in_range_left(self.bounds.start_bound(), k.as_ref()) {
+                if !in_range_left(self.bounds.start_bound(), k) {
                     return self.next();
                 }
-                if !in_range_right(self.bounds.end_bound(), k.as_ref()) {
+                if !in_range_right(self.bounds.end_bound(), k) {
                     self.done = true;
                     return None;
                 }
@@ -222,10 +222,10 @@ impl<'a, T, K: AsRef<[u8]>, B: RangeBounds<K>> Iterator for RangeMut<'a, T, K, B
         match self.iter.next() {
             Some(v) => {
                 let k = self.iter.curr_key();
-                if !in_range_left(self.bounds.start_bound(), k.as_ref()) {
+                if !in_range_left(self.bounds.start_bound(), k) {
                     return self.next();
                 }
-                if !in_range_right(self.bounds.end_bound(), k.as_ref()) {
+                if !in_range_right(self.bounds.end_bound(), k) {
                     self.done = true;
                     return None;
                 }

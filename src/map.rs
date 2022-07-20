@@ -11,6 +11,12 @@ pub struct RadixMap<T> {
     size: usize,
 }
 
+impl<T> Default for RadixMap<T> {
+    fn default() -> Self {
+        RadixMap::new()
+    }
+}
+
 impl<T> RadixMap<T> {
     pub fn new() -> Self {
         RadixMap {

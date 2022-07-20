@@ -1,7 +1,7 @@
 use crate::iter::{Iter, MapK, MapV};
 use crate::map::RadixMap;
 
-#[derive(Debug)]
+#[derive(Default, Debug)]
 pub struct RadixSet {
     inner: RadixMap<()>,
 }
@@ -89,28 +89,21 @@ impl<'a, 'b> Iterator for Intersection<'a, 'b> {
     type Item = Box<[u8]>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.left.next().is_none() {
-            return None;
-        }
-        if self.right.next().is_none() {
-            return None;
-        }
+        self.left.next()?;
+        self.right.next()?;
+
         let mut lk = self.left.curr_key();
         let mut rk = self.right.curr_key();
         // Advance the left iterator until it's key is smaller than
         // right's iterator key.
         while lk < rk {
-            if self.left.next().is_none() {
-                return None;
-            }
+            self.left.next()?;
             lk = self.left.curr_key();
         }
         // Advance the right iterator until it's key is smaller than
         // left's iterator key.
         while rk < lk {
-            if self.right.next().is_none() {
-                return None;
-            }
+            self.right.next()?;
             rk = self.right.curr_key();
         }
         Some(lk.into())

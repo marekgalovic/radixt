@@ -29,6 +29,9 @@ pub struct Node<T> {
     _phantom: PhantomData<T>,
 }
 
+unsafe impl<T> Send for Node<T> {}
+unsafe impl<T> Sync for Node<T> {}
+
 impl<T> Node<T> {
     #[inline]
     pub(crate) fn new(key: &[u8]) -> Self {
@@ -102,7 +105,7 @@ impl<T> Node<T> {
     }
 
     #[inline(always)]
-    pub(crate) fn children_mut(&self) -> &mut [Node<T>] {
+    pub(crate) fn children_mut(&mut self) -> &mut [Node<T>] {
         if !self.flags().contains(Flags::HAS_CHILDREN) {
             return &mut [];
         }
@@ -205,7 +208,7 @@ impl<T> Node<T> {
 
         let suffix = &prefix[prefix_len..];
         let child = &self.children()[child_idx];
-        if suffix.len() == 0 {
+        if suffix.is_empty() {
             return Some((0, child));
         }
         child
@@ -227,7 +230,7 @@ impl<T> Node<T> {
 
         let suffix = &prefix[prefix_len..];
         let child = &mut self.children_mut()[child_idx];
-        if suffix.len() == 0 {
+        if suffix.is_empty() {
             return Some((0, child));
         }
         child
@@ -270,7 +273,7 @@ impl<T> Node<T> {
 
     #[inline(always)]
     fn set_flags(&self, other: Flags, value: bool) {
-        let mut flags = self.flags().clone();
+        let mut flags = self.flags();
         flags.set(other, value);
         unsafe { ptr::write(self.data.as_ptr(), flags.bits()) }
     }
@@ -419,7 +422,7 @@ impl<T> Node<T> {
             // Allocate value if it's not allocated
             let children_count = self.children().len();
 
-            let mut new_flags = self.flags().clone();
+            let mut new_flags = self.flags();
             new_flags.set(Flags::VALUE_ALLOCATED, true);
             self.realloc(
                 self.curr_layout(),
@@ -472,7 +475,7 @@ impl<T> Node<T> {
 
         if !self.flags().contains(Flags::HAS_CHILDREN) {
             // Allocate children
-            let mut new_flags = self.flags().clone();
+            let mut new_flags = self.flags();
             new_flags.set(Flags::HAS_CHILDREN, true);
             self.realloc(self.curr_layout(), new_flags, self.key_len(), 1);
             // Insert at 0th position
@@ -519,7 +522,7 @@ impl<T> Node<T> {
             let removed = unsafe { ptr::read(self.children_ptr().add(idx)) };
             if self.children().len() == 1 {
                 // Deallocate children
-                let mut new_flags = self.flags().clone();
+                let mut new_flags = self.flags();
                 new_flags.set(Flags::HAS_CHILDREN, false);
                 self.realloc(self.curr_layout(), new_flags, self.key_len(), 0);
             } else {
@@ -563,7 +566,7 @@ impl<T> Node<T> {
         }
 
         // Allocate children
-        let mut new_flags = self.flags().clone();
+        let mut new_flags = self.flags();
         new_flags.set(Flags::HAS_CHILDREN, true);
         self.realloc(self.curr_layout(), new_flags, self.key_len(), src_count);
 
@@ -577,7 +580,7 @@ impl<T> Node<T> {
         }
 
         // Deallocate src node children
-        let mut new_src_flags = src_node.flags().clone();
+        let mut new_src_flags = src_node.flags();
         new_src_flags.set(Flags::HAS_CHILDREN, false);
         src_node.realloc(src_node.curr_layout(), new_src_flags, src_node.key_len(), 0);
     }
