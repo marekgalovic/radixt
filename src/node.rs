@@ -122,6 +122,13 @@ impl<T> Node<T> {
         let (prefix_len, child_idx) = longest_common_prefix(self.children(), key);
         if prefix_len == 0 {
             // No child shares a prefix with the key
+            if key.len() > 255 {
+                // Key length is greater than 255. Insert a child with key len == 255 and insert
+                // the remainder into it.
+                self.insert_child(child_idx, Node::new(&key[..255]));
+                return self.children_mut()[child_idx].insert(&key[255..], value);
+            }
+            // Insert a new child at child_idx offset
             self.insert_child(child_idx, Node::new_with_value(key, value));
             return None;
         }
@@ -786,6 +793,45 @@ mod tests {
     }
 
     #[test]
+    fn test_insert_with_key_len_greater_than_255() {
+        let mut node = Node::new("".as_bytes());
+        assert_eq!(NodeIter::new(&node).count(), 1);
+
+        let key_a = vec![0; 260];
+        let mut key_b = key_a.clone();
+        key_b.extend(&[1, 2, 3]);
+        let mut key_c = key_a.clone();
+        key_c.extend(&[4, 5, 6]);
+        let key_d = vec![0; 520];
+        let key_e = vec![1; 512];
+        let key_f = vec![2; 510];
+
+        node.insert(&key_a, 1);
+        assert_eq!(NodeIter::new(&node).count(), 3);
+        assert_eq!(node.get(&key_a), Some(&1));
+
+        node.insert(&key_b, 2);
+        assert_eq!(NodeIter::new(&node).count(), 4);
+        assert_eq!(node.get(&key_b), Some(&2));
+
+        node.insert(&key_c, 3);
+        assert_eq!(NodeIter::new(&node).count(), 5);
+        assert_eq!(node.get(&key_c), Some(&3));
+
+        node.insert(&key_d, 4);
+        assert_eq!(NodeIter::new(&node).count(), 7);
+        assert_eq!(node.get(&key_d), Some(&4));
+
+        node.insert(&key_e, 5);
+        assert_eq!(NodeIter::new(&node).count(), 10);
+        assert_eq!(node.get(&key_e), Some(&5));
+
+        node.insert(&key_f, 6);
+        assert_eq!(NodeIter::new(&node).count(), 12);
+        assert_eq!(node.get(&key_f), Some(&6));
+    }
+
+    #[test]
     fn test_remove() {
         let mut node = Node::new(&[]);
         node.insert("hello".as_bytes(), 0);
@@ -832,6 +878,13 @@ mod tests {
         assert_eq!(node.get("hel".as_bytes()), None);
         assert_eq!(node.get("hell".as_bytes()), None);
         assert_eq!(node.get("hello".as_bytes()), None);
+        assert_eq!(NodeIter::new(&node).count(), 1);
+
+        node.insert(&vec![0; 512], 3);
+        assert_eq!(NodeIter::new(&node).count(), 4);
+        assert_eq!(node.get(&vec![0; 512]), Some(&3));
+
+        assert_eq!(node.remove(&vec![0; 512]), Some(3));
         assert_eq!(NodeIter::new(&node).count(), 1);
     }
 

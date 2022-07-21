@@ -271,6 +271,73 @@ mod tests {
     }
 
     #[test]
+    fn test_with_long_keys() {
+        let mut m = RadixMap::new();
+
+        let key_a = vec![0; 260];
+        let mut key_b = key_a.clone();
+        key_b.extend(&[1, 2, 3]);
+        let mut key_c = key_a.clone();
+        key_c.extend(&[4, 5, 6]);
+        let key_d = vec![0; 520];
+        let key_e = vec![1; 512];
+        let key_f = vec![2; 510];
+
+        m.insert(&key_a, 1);
+        m.insert(&key_b, 2);
+        m.insert(&key_c, 3);
+        m.insert(&key_d, 4);
+        m.insert(&key_e, 5);
+        m.insert(&key_f, 6);
+
+        assert_eq!(m.len(), 6);
+        assert_eq!(m.get(&key_a), Some(&1));
+        assert_eq!(m.get(&key_b), Some(&2));
+        assert_eq!(m.get(&key_c), Some(&3));
+        assert_eq!(m.get(&key_d), Some(&4));
+        assert_eq!(m.get(&key_e), Some(&5));
+        assert_eq!(m.get(&key_f), Some(&6));
+
+        // Test remove
+        assert_eq!(m.remove(&key_a), Some(1));
+        assert_eq!(m.len(), 5);
+        assert_eq!(m.get(&key_a), None);
+        assert_eq!(m.get(&key_b), Some(&2));
+        assert_eq!(m.get(&key_c), Some(&3));
+        assert_eq!(m.get(&key_d), Some(&4));
+        assert_eq!(m.get(&key_e), Some(&5));
+        assert_eq!(m.get(&key_f), Some(&6));
+
+        assert_eq!(m.remove(&key_d), Some(4));
+        assert_eq!(m.len(), 4);
+        assert_eq!(m.get(&key_a), None);
+        assert_eq!(m.get(&key_b), Some(&2));
+        assert_eq!(m.get(&key_c), Some(&3));
+        assert_eq!(m.get(&key_d), None);
+        assert_eq!(m.get(&key_e), Some(&5));
+        assert_eq!(m.get(&key_f), Some(&6));
+
+        // Test remove missing
+        assert_eq!(m.remove(&key_d), None);
+        assert_eq!(m.len(), 4);
+        assert_eq!(m.get(&key_a), None);
+        assert_eq!(m.get(&key_b), Some(&2));
+        assert_eq!(m.get(&key_c), Some(&3));
+        assert_eq!(m.get(&key_d), None);
+        assert_eq!(m.get(&key_e), Some(&5));
+        assert_eq!(m.get(&key_f), Some(&6));
+
+        // Test iter
+        assert_eq!(m.iter().count(), 4);
+        assert_eq!(m.prefix_iter(&key_a).count(), 2);
+        assert_eq!(m.prefix_iter(&[0]).count(), 2);
+        assert_eq!(m.prefix_iter(&[1]).count(), 1);
+        assert_eq!(m.prefix_iter(&[2]).count(), 1);
+        assert_eq!(m.prefix_iter(&[3]).count(), 0);
+        assert_eq!(m.prefix_iter(&key_d).count(), 0);
+    }
+
+    #[test]
     fn test_iter() {
         let m = populated_map();
 

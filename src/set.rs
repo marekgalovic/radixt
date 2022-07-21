@@ -251,6 +251,73 @@ mod tests {
     }
 
     #[test]
+    fn test_with_long_keys() {
+        let mut set = RadixSet::new();
+
+        let key_a = vec![0; 260];
+        let mut key_b = key_a.clone();
+        key_b.extend(&[1, 2, 3]);
+        let mut key_c = key_a.clone();
+        key_c.extend(&[4, 5, 6]);
+        let key_d = vec![0; 520];
+        let key_e = vec![1; 512];
+        let key_f = vec![2; 510];
+
+        set.insert(&key_a);
+        set.insert(&key_b);
+        set.insert(&key_c);
+        set.insert(&key_d);
+        set.insert(&key_e);
+        set.insert(&key_f);
+
+        assert_eq!(set.len(), 6);
+        assert!(set.contains(&key_a));
+        assert!(set.contains(&key_b));
+        assert!(set.contains(&key_c));
+        assert!(set.contains(&key_d));
+        assert!(set.contains(&key_e));
+        assert!(set.contains(&key_f));
+
+        // Test remove
+        assert!(set.remove(&key_a));
+        assert_eq!(set.len(), 5);
+        assert!(!set.contains(&key_a));
+        assert!(set.contains(&key_b));
+        assert!(set.contains(&key_c));
+        assert!(set.contains(&key_d));
+        assert!(set.contains(&key_e));
+        assert!(set.contains(&key_f));
+
+        assert!(set.remove(&key_d));
+        assert_eq!(set.len(), 4);
+        assert!(!set.contains(&key_a));
+        assert!(set.contains(&key_b));
+        assert!(set.contains(&key_c));
+        assert!(!set.contains(&key_d));
+        assert!(set.contains(&key_e));
+        assert!(set.contains(&key_f));
+
+        // Test remove missing
+        assert!(!set.remove(&key_d));
+        assert_eq!(set.len(), 4);
+        assert!(!set.contains(&key_a));
+        assert!(set.contains(&key_b));
+        assert!(set.contains(&key_c));
+        assert!(!set.contains(&key_d));
+        assert!(set.contains(&key_e));
+        assert!(set.contains(&key_f));
+
+        // Test iter
+        assert_eq!(set.iter().count(), 4);
+        assert_eq!(set.prefix_iter(&key_a).count(), 2);
+        assert_eq!(set.prefix_iter(&[0]).count(), 2);
+        assert_eq!(set.prefix_iter(&[1]).count(), 1);
+        assert_eq!(set.prefix_iter(&[2]).count(), 1);
+        assert_eq!(set.prefix_iter(&[3]).count(), 0);
+        assert_eq!(set.prefix_iter(&key_d).count(), 0);
+    }
+
+    #[test]
     fn test_iter() {
         let set = populated_set();
 
