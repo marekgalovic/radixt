@@ -69,6 +69,11 @@ impl RadixSet {
     pub fn union<'a, 'b>(&'a self, other: &'b RadixSet) -> Union<'a, 'b> {
         Union::new(self, other)
     }
+
+    #[inline(always)]
+    pub fn difference<'a, 'b>(&'a self, other: &'b RadixSet) -> Difference<'a, 'b> {
+        Difference::new(self, other)
+    }
 }
 
 pub struct Intersection<'a, 'b> {
@@ -179,6 +184,34 @@ impl<'a, 'b> Iterator for Union<'a, 'b> {
             return Some(rk.into());
         }
         Some(lk.into())
+    }
+}
+
+pub struct Difference<'a, 'b> {
+    left: Iter<'a, (), MapV<'a, ()>>,
+    right: &'b RadixSet,
+}
+
+impl<'a, 'b> Difference<'a, 'b> {
+    fn new(left: &'a RadixSet, right: &'b RadixSet) -> Self {
+        Difference {
+            left: Iter::new(Some(left.inner.root()), vec![]),
+            right,
+        }
+    }
+}
+
+impl<'a, 'b> Iterator for Difference<'a, 'b> {
+    type Item = Box<[u8]>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            self.left.next()?;
+            let lk = self.left.curr_key();
+            if !self.right.contains(lk) {
+                return Some(lk.into());
+            }
+        }
     }
 }
 
@@ -578,5 +611,62 @@ mod tests {
         assert_eq!(union[4].as_ref(), b"ae");
         assert_eq!(union[5].as_ref(), b"af");
         assert_eq!(union[6].as_ref(), b"ag");
+    }
+
+    #[test]
+    fn test_difference() {
+        let mut left = RadixSet::new();
+        left.insert("aa");
+        left.insert("ab");
+        left.insert("ac");
+
+        let mut right = RadixSet::new();
+        right.insert("ab");
+        right.insert("ac");
+        right.insert("ad");
+        right.insert("af");
+
+        let diff: Vec<Box<[u8]>> = left.difference(&right).collect();
+        assert_eq!(diff.len(), 1);
+        assert_eq!(diff[0].as_ref(), b"aa");
+
+        left.insert("ae");
+
+        let diff: Vec<Box<[u8]>> = left.difference(&right).collect();
+        assert_eq!(diff.len(), 2);
+        assert_eq!(diff[0].as_ref(), b"aa");
+        assert_eq!(diff[1].as_ref(), b"ae");
+    }
+
+    #[test]
+    fn test_difference_empty() {
+        let mut left = RadixSet::new();
+        left.insert("aa");
+        left.insert("ab");
+        left.insert("ac");
+
+        let mut right = RadixSet::new();
+        right.insert("aa");
+        right.insert("ab");
+        right.insert("ac");
+        right.insert("ad");
+        right.insert("ae");
+
+        let diff: Vec<Box<[u8]>> = left.difference(&right).collect();
+        assert_eq!(diff.len(), 0);
+    }
+
+    #[test]
+    fn test_difference_empty_large() {
+        let mut left = RadixSet::new();
+        let mut right = RadixSet::new();
+
+        for i in 0..100000 {
+            left.insert(&(i as u64).to_be_bytes());
+            right.insert(&(i as u64).to_be_bytes());
+        }
+
+        let diff: Vec<Box<[u8]>> = left.difference(&right).collect();
+        assert_eq!(diff.len(), 0);
     }
 }
