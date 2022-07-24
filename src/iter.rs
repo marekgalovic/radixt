@@ -131,6 +131,46 @@ impl<'a, T, M: IterMapMut<'a, T>> Iterator for IterMut<'a, T, M> {
     }
 }
 
+pub struct IntoIter<T> {
+    stack: Vec<(usize, Node<T>)>,
+    prefix: Vec<u8>,
+}
+
+impl<T> IntoIter<T> {
+    pub(crate) fn new(root: Node<T>) -> Self {
+        IntoIter {
+            stack: vec![(0, root)],
+            prefix: vec![],
+        }
+    }
+}
+
+impl<T> Iterator for IntoIter<T> {
+    type Item = (Box<[u8]>, T);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.stack.pop() {
+            Some((prefix_len, mut node)) => {
+                // Update prefix
+                self.prefix.truncate(prefix_len);
+                self.prefix.extend(node.key());
+
+                // Push node's children to stack
+                for child in node.take_children().rev() {
+                    self.stack.push((self.prefix.len(), child));
+                }
+
+                // Return value
+                match node.take_value() {
+                    Some(v) => Some((self.prefix.as_slice().into(), v)),
+                    None => self.next(),
+                }
+            }
+            None => None,
+        }
+    }
+}
+
 #[inline(always)]
 fn in_range_left<K: AsRef<[u8]>>(bound: Bound<&K>, key: &[u8]) -> bool {
     match bound {

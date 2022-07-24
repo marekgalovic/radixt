@@ -95,6 +95,16 @@ impl<T> Node<T> {
         None
     }
 
+    #[inline]
+    pub(crate) fn take_value(&mut self) -> Option<T> {
+        if self.flags().contains(Flags::VALUE_INITIALIZED) {
+            self.set_flags(Flags::VALUE_INITIALIZED, false);
+            Some(unsafe { ptr::read(self.value_ptr()) })
+        } else {
+            None
+        }
+    }
+
     #[inline(always)]
     pub(crate) fn children(&self) -> &[Node<T>] {
         if !self.flags().contains(Flags::HAS_CHILDREN) {
@@ -111,6 +121,13 @@ impl<T> Node<T> {
         }
 
         unsafe { from_raw_parts_mut(self.children_ptr(), *self.children_len_ptr() as usize + 1) }
+    }
+
+    /// Returns an iterator over node's children that deallocates this node's
+    /// children after iteration.
+    #[inline(always)]
+    pub(crate) fn take_children(&mut self) -> TakeChildren<'_, T> {
+        TakeChildren::new(self)
     }
 
     #[inline]
@@ -414,16 +431,6 @@ impl<T> Node<T> {
 
     // Value access methods
     #[inline]
-    fn take_value(&mut self) -> Option<T> {
-        if self.flags().contains(Flags::VALUE_INITIALIZED) {
-            self.set_flags(Flags::VALUE_INITIALIZED, false);
-            Some(unsafe { ptr::read(self.value_ptr()) })
-        } else {
-            None
-        }
-    }
-
-    #[inline]
     fn replace_value(&mut self, value: T) -> Option<T> {
         if !self.flags().contains(Flags::VALUE_ALLOCATED) {
             // Allocate value if it's not allocated
@@ -587,9 +594,17 @@ impl<T> Node<T> {
         }
 
         // Deallocate src node children
-        let mut new_src_flags = src_node.flags();
-        new_src_flags.set(Flags::HAS_CHILDREN, false);
-        src_node.realloc(src_node.curr_layout(), new_src_flags, src_node.key_len(), 0);
+        src_node.dealloc_children();
+    }
+
+    fn dealloc_children(&mut self) {
+        let mut flags = self.flags();
+        if !flags.contains(Flags::HAS_CHILDREN) {
+            panic!("Node has no children");
+        }
+
+        flags.set(Flags::HAS_CHILDREN, false);
+        self.realloc(self.curr_layout(), flags, self.key_len(), 0);
     }
 
     #[inline(always)]
@@ -633,11 +648,80 @@ impl<T> Drop for Node<T> {
     }
 }
 
+pub(crate) struct TakeChildren<'a, T> {
+    node: &'a mut Node<T>,
+    start_idx: usize,
+    end_idx: usize,
+}
+
+impl<'a, T> TakeChildren<'a, T> {
+    fn new(node: &'a mut Node<T>) -> Self {
+        let children_count = node.children().len();
+        TakeChildren {
+            node,
+            start_idx: 0,
+            end_idx: children_count,
+        }
+    }
+
+    fn read_child(&self, idx: usize) -> Node<T> {
+        unsafe { ptr::read(self.node.children_ptr().add(idx)) }
+    }
+}
+
+impl<'a, T> Drop for TakeChildren<'a, T> {
+    fn drop(&mut self) {
+        if self.node.flags().contains(Flags::HAS_CHILDREN) {
+            for idx in self.start_idx..self.end_idx {
+                let _child = self.read_child(idx);
+            }
+            self.node.dealloc_children();
+        }
+    }
+}
+
+impl<'a, T> Iterator for TakeChildren<'a, T> {
+    type Item = Node<T>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if !self.node.flags().contains(Flags::HAS_CHILDREN) {
+            return None;
+        }
+
+        let child = self.read_child(self.start_idx);
+        self.start_idx += 1;
+
+        if self.start_idx == self.end_idx {
+            self.node.dealloc_children();
+        }
+
+        Some(child)
+    }
+}
+
+impl<'a, T> DoubleEndedIterator for TakeChildren<'a, T> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        if !self.node.flags().contains(Flags::HAS_CHILDREN) {
+            return None;
+        }
+
+        self.end_idx -= 1;
+        let child = self.read_child(self.end_idx);
+
+        if self.end_idx == self.start_idx {
+            self.node.dealloc_children();
+        }
+
+        Some(child)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     use std::collections::BTreeMap;
+    use std::rc::Rc;
 
     struct NodeIter<'a, V> {
         stack: Vec<&'a Node<V>>,
@@ -1128,5 +1212,131 @@ mod tests {
         assert!(root.find_prefix(b"foo;bag").is_none());
         assert!(root.find_prefix(b"baz").is_none());
         assert!(root.find_prefix(b"bz").is_none());
+    }
+
+    #[test]
+    fn test_take_children() {
+        let rc = Rc::new(());
+        let mut root: Node<Rc<()>> = Node::new(&[]);
+        root.push_child(Node::new_with_value(b"a", rc.clone()));
+        root.push_child(Node::new_with_value(b"b", rc.clone()));
+        root.push_child(Node::new_with_value(b"c", rc.clone()));
+        root.push_child(Node::new_with_value(b"d", rc.clone()));
+
+        assert_eq!(root.children().len(), 4);
+        assert!(root.flags().contains(Flags::HAS_CHILDREN));
+
+        let mut children_it = root.take_children();
+        assert_eq!(children_it.next().unwrap().key(), b"a");
+        assert_eq!(children_it.next().unwrap().key(), b"b");
+        assert_eq!(children_it.next().unwrap().key(), b"c");
+        assert_eq!(children_it.next().unwrap().key(), b"d");
+        drop(children_it);
+
+        assert!(!root.flags().contains(Flags::HAS_CHILDREN));
+        assert_eq!(Rc::strong_count(&rc), 1);
+    }
+
+    #[test]
+    fn test_take_children_rev() {
+        let rc = Rc::new(());
+        let mut root: Node<Rc<()>> = Node::new(&[]);
+        root.push_child(Node::new_with_value(b"a", rc.clone()));
+        root.push_child(Node::new_with_value(b"b", rc.clone()));
+        root.push_child(Node::new_with_value(b"c", rc.clone()));
+        root.push_child(Node::new_with_value(b"d", rc.clone()));
+
+        assert_eq!(root.children().len(), 4);
+        assert!(root.flags().contains(Flags::HAS_CHILDREN));
+
+        let mut children_it = root.take_children().rev();
+        assert_eq!(children_it.next().unwrap().key(), b"d");
+        assert_eq!(children_it.next().unwrap().key(), b"c");
+        assert_eq!(children_it.next().unwrap().key(), b"b");
+        assert_eq!(children_it.next().unwrap().key(), b"a");
+        drop(children_it);
+
+        assert!(!root.flags().contains(Flags::HAS_CHILDREN));
+        assert_eq!(Rc::strong_count(&rc), 1);
+    }
+
+    #[test]
+    fn test_take_children_front_back() {
+        let rc = Rc::new(());
+        let mut root: Node<Rc<()>> = Node::new(&[]);
+        root.push_child(Node::new_with_value(b"a", rc.clone()));
+        root.push_child(Node::new_with_value(b"b", rc.clone()));
+        root.push_child(Node::new_with_value(b"c", rc.clone()));
+        root.push_child(Node::new_with_value(b"d", rc.clone()));
+
+        assert_eq!(root.children().len(), 4);
+        assert!(root.flags().contains(Flags::HAS_CHILDREN));
+
+        let mut children_it = root.take_children();
+        assert_eq!(children_it.next().unwrap().key(), b"a");
+        assert_eq!(children_it.next_back().unwrap().key(), b"d");
+        assert_eq!(children_it.next().unwrap().key(), b"b");
+        assert_eq!(children_it.next_back().unwrap().key(), b"c");
+        assert!(children_it.next().is_none());
+        assert!(children_it.next_back().is_none());
+        drop(children_it);
+
+        assert!(!root.flags().contains(Flags::HAS_CHILDREN));
+        assert_eq!(Rc::strong_count(&rc), 1);
+    }
+
+    #[test]
+    fn test_take_children_unfinished() {
+        let rc = Rc::new(());
+        let mut root: Node<Rc<()>> = Node::new(&[]);
+        root.push_child(Node::new_with_value(b"a", rc.clone()));
+        root.push_child(Node::new_with_value(b"b", rc.clone()));
+        root.push_child(Node::new_with_value(b"c", rc.clone()));
+        root.push_child(Node::new_with_value(b"d", rc.clone()));
+
+        assert_eq!(Rc::strong_count(&rc), 5);
+
+        assert_eq!(root.children().len(), 4);
+        assert!(root.flags().contains(Flags::HAS_CHILDREN));
+
+        let mut children_it = root.take_children();
+        assert_eq!(children_it.next().unwrap().key(), b"a");
+        assert_eq!(children_it.next().unwrap().key(), b"b");
+        drop(children_it);
+
+        assert!(!root.flags().contains(Flags::HAS_CHILDREN));
+        assert_eq!(Rc::strong_count(&rc), 1);
+    }
+
+    #[test]
+    fn test_take_children_rev_unfinished() {
+        let rc = Rc::new(());
+        let mut root: Node<Rc<()>> = Node::new(&[]);
+        root.push_child(Node::new_with_value(b"a", rc.clone()));
+        root.push_child(Node::new_with_value(b"b", rc.clone()));
+        root.push_child(Node::new_with_value(b"c", rc.clone()));
+        root.push_child(Node::new_with_value(b"d", rc.clone()));
+
+        assert_eq!(root.children().len(), 4);
+        assert!(root.flags().contains(Flags::HAS_CHILDREN));
+
+        let mut children_it = root.take_children().rev();
+        assert_eq!(children_it.next().unwrap().key(), b"d");
+        assert_eq!(children_it.next().unwrap().key(), b"c");
+        drop(children_it);
+
+        assert!(!root.flags().contains(Flags::HAS_CHILDREN));
+        assert_eq!(Rc::strong_count(&rc), 1);
+    }
+
+    #[test]
+    fn test_take_children_with_no_children() {
+        let mut root: Node<u32> = Node::new(&[]);
+
+        assert_eq!(root.children().len(), 0);
+        assert!(!root.flags().contains(Flags::HAS_CHILDREN));
+
+        let mut children_it = root.take_children().rev();
+        assert!(children_it.next().is_none());
     }
 }

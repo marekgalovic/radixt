@@ -60,16 +60,22 @@ impl RadixSet {
         self.inner.prefix_keys(prefix)
     }
 
+    /// Visits the elements representing the intersection, i.e., the elements that are both in
+    /// `self` and `other`, in ascending order.
     #[inline(always)]
     pub fn intersection<'a, 'b>(&'a self, other: &'b RadixSet) -> Intersection<'a, 'b> {
         Intersection::new(self, other)
     }
 
+    /// Visits the elements representing the union, i.e., all the elements in `self` or `other`,
+    /// without duplicates, in ascending order.
     #[inline(always)]
     pub fn union<'a, 'b>(&'a self, other: &'b RadixSet) -> Union<'a, 'b> {
         Union::new(self, other)
     }
 
+    /// Visits the elements representing the difference, i.e., the elements that are in `self`
+    /// but not in `other`, in ascending order.
     #[inline(always)]
     pub fn difference<'a, 'b>(&'a self, other: &'b RadixSet) -> Difference<'a, 'b> {
         Difference::new(self, other)
@@ -212,6 +218,26 @@ impl<'a, 'b> Iterator for Difference<'a, 'b> {
                 return Some(lk.into());
             }
         }
+    }
+}
+
+impl<K: AsRef<[u8]>, const N: usize> From<[K; N]> for RadixSet {
+    fn from(items: [K; N]) -> Self {
+        let mut set = RadixSet::new();
+        for item in items {
+            set.insert(item);
+        }
+        set
+    }
+}
+
+impl<K: AsRef<[u8]>> FromIterator<K> for RadixSet {
+    fn from_iter<I: IntoIterator<Item = K>>(iter: I) -> Self {
+        let mut set = RadixSet::new();
+        for item in iter {
+            set.insert(item);
+        }
+        set
     }
 }
 
@@ -668,5 +694,31 @@ mod tests {
 
         let diff: Vec<Box<[u8]>> = left.difference(&right).collect();
         assert_eq!(diff.len(), 0);
+    }
+
+    #[test]
+    fn test_from() {
+        let set = RadixSet::from(["foo", "bar", "baz", "foo"]);
+
+        assert_eq!(set.len(), 3);
+
+        let mut it = set.iter();
+        assert_eq!(it.next(), Some("bar".as_bytes().into()));
+        assert_eq!(it.next(), Some("baz".as_bytes().into()));
+        assert_eq!(it.next(), Some("foo".as_bytes().into()));
+        assert!(it.next().is_none());
+    }
+
+    #[test]
+    fn test_from_iterator() {
+        let set: RadixSet = vec!["foo", "bar", "baz", "foo"].into_iter().collect();
+
+        assert_eq!(set.len(), 3);
+
+        let mut it = set.iter();
+        assert_eq!(it.next(), Some("bar".as_bytes().into()));
+        assert_eq!(it.next(), Some("baz".as_bytes().into()));
+        assert_eq!(it.next(), Some("foo".as_bytes().into()));
+        assert!(it.next().is_none());
     }
 }

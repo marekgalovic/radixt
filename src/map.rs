@@ -1,7 +1,8 @@
 use std::ops::RangeBounds;
 
 use crate::iter::{
-    Iter, IterMap, IterMapMut, IterMut, MapK, MapKV, MapKVMut, MapV, MapVMut, Range, RangeMut,
+    IntoIter, Iter, IterMap, IterMapMut, IterMut, MapK, MapKV, MapKVMut, MapV, MapVMut, Range,
+    RangeMut,
 };
 use crate::node::Node;
 
@@ -201,9 +202,40 @@ impl<T> RadixMap<T> {
     }
 }
 
+impl<T> IntoIterator for RadixMap<T> {
+    type Item = (Box<[u8]>, T);
+    type IntoIter = IntoIter<T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        IntoIter::new(self.root)
+    }
+}
+
+impl<K: AsRef<[u8]>, T, const N: usize> From<[(K, T); N]> for RadixMap<T> {
+    fn from(items: [(K, T); N]) -> Self {
+        let mut map = RadixMap::new();
+        for (key, value) in items {
+            map.insert(key, value);
+        }
+        map
+    }
+}
+
+impl<K: AsRef<[u8]>, T> FromIterator<(K, T)> for RadixMap<T> {
+    fn from_iter<I: IntoIterator<Item = (K, T)>>(iter: I) -> Self {
+        let mut map = RadixMap::new();
+        for (key, value) in iter {
+            map.insert(key, value);
+        }
+        map
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::rc::Rc;
 
     fn populated_map() -> RadixMap<u32> {
         let mut m = RadixMap::new();
@@ -608,5 +640,92 @@ mod tests {
         *v = 66;
 
         assert_eq!(m.get("bb"), Some(&66));
+    }
+
+    #[test]
+    fn test_from() {
+        let map = RadixMap::<u64>::from([("foo", 1), ("bar", 2), ("baz", 3), ("foo", 4)]);
+
+        assert_eq!(map.len(), 3);
+
+        let mut it = map.iter();
+        assert_eq!(it.next(), Some(("bar".as_bytes().into(), &2)));
+        assert_eq!(it.next(), Some(("baz".as_bytes().into(), &3)));
+        assert_eq!(it.next(), Some(("foo".as_bytes().into(), &4)));
+        assert!(it.next().is_none());
+    }
+
+    #[test]
+    fn test_from_iterator() {
+        let map: RadixMap<u64> = vec![("foo", 1), ("bar", 2), ("baz", 3), ("foo", 4)]
+            .into_iter()
+            .collect();
+
+        assert_eq!(map.len(), 3);
+
+        let mut it = map.iter();
+        assert_eq!(it.next(), Some(("bar".as_bytes().into(), &2)));
+        assert_eq!(it.next(), Some(("baz".as_bytes().into(), &3)));
+        assert_eq!(it.next(), Some(("foo".as_bytes().into(), &4)));
+        assert!(it.next().is_none());
+    }
+
+    #[test]
+    fn test_into_iter() {
+        let m = populated_map();
+        assert_eq!(m.len(), 5);
+
+        let mut it = m.into_iter();
+
+        let (k, v) = it.next().unwrap();
+        assert_eq!(k.as_ref(), b"ab");
+        assert_eq!(v, 3);
+
+        let (k, v) = it.next().unwrap();
+        assert_eq!(k.as_ref(), b"abb;0");
+        assert_eq!(v, 2);
+
+        let (k, v) = it.next().unwrap();
+        assert_eq!(k.as_ref(), b"abc;0");
+        assert_eq!(v, 1);
+
+        let (k, v) = it.next().unwrap();
+        assert_eq!(k.as_ref(), b"c");
+        assert_eq!(v, 4);
+
+        let (k, v) = it.next().unwrap();
+        assert_eq!(k.as_ref(), b"cad");
+        assert_eq!(v, 5);
+
+        assert!(it.next().is_none());
+    }
+
+    #[test]
+    fn test_into_iter_drops_internal_values() {
+        let rc = Rc::new(());
+
+        let mut m = RadixMap::new();
+        m.insert("a", rc.clone());
+        m.insert("aba", rc.clone());
+        m.insert("cat", rc.clone());
+
+        let _: Vec<(Box<[u8]>, Rc<()>)> = m.into_iter().collect();
+        assert_eq!(Rc::strong_count(&rc), 1);
+    }
+
+    #[test]
+    fn test_into_iter_unfinished() {
+        let rc = Rc::new(());
+
+        let mut m = RadixMap::new();
+        m.insert("a", rc.clone());
+        m.insert("aba", rc.clone());
+        m.insert("cat", rc.clone());
+
+        let mut it = m.into_iter();
+        let _ = it.next().unwrap();
+        drop(it);
+
+        assert_eq!(Rc::strong_count(&rc), 1);
     }
 }
