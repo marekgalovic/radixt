@@ -5,10 +5,15 @@ authors = ["Marek Galovic <galovic.galovic@gmail.com>"]
 edition = "2021"
 description = "A fast, memory-efficient radix tree implementation in Rust"
 license = "MIT"
+homepage = "https://github.com/marekgalovic/radix_tree_rs"
 repository = "https://github.com/marekgalovic/radix_tree_rs"
 keywords = ["radix", "tree", "map", "set"]
 readme = "README.md"
 categories = ["data-structures"]
+exclude = [
+    "benches/*",
+    "examples/*"
+]
 
 [dependencies]
 bitflags = "1.3.2"
@@ -20,3 +25,4 @@ rand = "0.8.5"
 [[bench]]
 name = "map"
 harness = false
+
