@@ -1,5 +1,5 @@
 [package]
-name = "radix_tree"
+name = "radixt"
 version = "0.1.0"
 authors = ["Marek Galovic <galovic.galovic@gmail.com>"]
 edition = "2021"

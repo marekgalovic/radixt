@@ -1,7 +1,7 @@
 use std::collections::{BTreeSet, HashSet};
 use std::io::BufRead;
 
-use radix_tree::RadixSet;
+use radixt::RadixSet;
 
 fn main() {
     let container = std::env::args().nth(1).unwrap();

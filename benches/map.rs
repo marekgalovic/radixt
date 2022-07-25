@@ -1,7 +1,7 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use rand::Rng;
 
-use radix_tree::RadixMap;
+use radixt::RadixMap;
 
 const SIZES: &[usize] = &[10000, 100000, 1000000];
 const KEY_LENS: &[usize] = &[8, 32, 128];
